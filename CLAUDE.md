@@ -29,7 +29,7 @@ Grow one or several accounts, then **sell ads to legal tech companies**.
 ---
 
 ## What is built (the working pipeline)
-Run from the project root using `.venv/bin/python`.
+Run from the project root with the venv activated (`source .venv/bin/activate`), then use `python`.
 
 ### STAGE 1 — Link → Characters (AUTOMATED)
 One command: `python run.py "<story-url>"`. `run.py` is the manager; it runs:

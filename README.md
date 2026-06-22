@@ -22,7 +22,7 @@ then stops. Cost: **about 5 cents per story.**
 
 ### Run it
 ```bash
-.venv/bin/python run.py "https://www.rollonfriday.com/news-content/some-story"
+python run.py "https://www.rollonfriday.com/news-content/some-story"
 ```
 
 `run.py` is the manager. It runs three steps in order:
@@ -57,24 +57,19 @@ rest of your computer.
 python3 -m venv .venv
 ```
 
-### 2. Install the libraries into it
-You have two options.
-
-**Option A — no activation needed (used in this project):** call the venv's
-Python directly with `.venv/bin/python`.
+### 2. Activate it
+After activating, plain `python` and `pip` automatically use this venv.
 ```bash
-.venv/bin/pip install -r requirements.txt
+source .venv/bin/activate
 ```
+Do this once per terminal. To turn it off later, run `deactivate`.
 
-**Option B — activate it first**, then `python`/`pip` use the venv automatically:
+### 3. Install the libraries
 ```bash
-source .venv/bin/activate          # turn the venv on (do this each new terminal)
 pip install -r requirements.txt
-# ... run your commands ...
-deactivate                         # turn the venv off when done
 ```
 
-### 3. Add your API keys
+### 4. Add your API keys
 Create a file named `.env` in the project root (it is ignored by git, so your
 keys stay private):
 ```
@@ -83,11 +78,10 @@ ELEVENLABS_API_KEY="your-elevenlabs-key"
 OPENAI_API_KEY="your-openai-key"
 ```
 
-### 4. Run it
+### 5. Run it
 ```bash
-.venv/bin/python run.py "https://www.rollonfriday.com/news-content/some-story"
+python run.py "https://www.rollonfriday.com/news-content/some-story"
 ```
-(or just `python run.py "..."` if you activated the venv in step 2B)
 
 ## Files
 - `run.py` — manager (runs the whole link → characters stage)
