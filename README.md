@@ -48,18 +48,52 @@ then stops. Cost: **about 5 cents per story.**
 
 ## Setup
 
-1. Python virtual environment with the libraries installed (`.venv/`).
-2. API keys in a `.env` file (not committed):
-   ```
-   FAL_KEY="..."
-   ELEVENLABS_API_KEY="..."
-   OPENAI_API_KEY="..."
-   ```
+You need **Python 3.10+**. All commands run from the project root.
+
+### 1. Create a virtual environment
+A virtual environment (venv) keeps this project's libraries separate from the
+rest of your computer.
+```bash
+python3 -m venv .venv
+```
+
+### 2. Install the libraries into it
+You have two options.
+
+**Option A — no activation needed (used in this project):** call the venv's
+Python directly with `.venv/bin/python`.
+```bash
+.venv/bin/pip install -r requirements.txt
+```
+
+**Option B — activate it first**, then `python`/`pip` use the venv automatically:
+```bash
+source .venv/bin/activate          # turn the venv on (do this each new terminal)
+pip install -r requirements.txt
+# ... run your commands ...
+deactivate                         # turn the venv off when done
+```
+
+### 3. Add your API keys
+Create a file named `.env` in the project root (it is ignored by git, so your
+keys stay private):
+```
+FAL_KEY="your-fal-key"
+ELEVENLABS_API_KEY="your-elevenlabs-key"
+OPENAI_API_KEY="your-openai-key"
+```
+
+### 4. Run it
+```bash
+.venv/bin/python run.py "https://www.rollonfriday.com/news-content/some-story"
+```
+(or just `python run.py "..."` if you activated the venv in step 2B)
 
 ## Files
 - `run.py` — manager (runs the whole link → characters stage)
 - `scrape.py`, `analyze.py`, `gen_characters.py` — the three pipeline steps
 - `costs.py` — price list; every script prints its cost
+- `requirements.txt` — the Python libraries to install
 - `.env` — API keys (ignored by git)
 
 ---
