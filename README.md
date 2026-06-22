@@ -48,37 +48,22 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 
 ## Setup
 
-You need **Python 3.10+**. All commands run from the project root.
+Requires **Python 3.10+**.
 
-### 1. Create a virtual environment
-A virtual environment (venv) keeps this project's libraries separate from the
-rest of your computer.
 ```bash
 python3 -m venv .venv
-```
-
-### 2. Activate it
-After activating, plain `python` and `pip` automatically use this venv.
-```bash
 source .venv/bin/activate
-```
-Do this once per terminal. To turn it off later, run `deactivate`.
-
-### 3. Install the libraries
-```bash
 pip install -r requirements.txt
 ```
 
-### 4. Add your API keys
-Create a file named `.env` in the project root (it is ignored by git, so your
-keys stay private):
+Then create a `.env` file (ignored by git) with your keys:
 ```
 FAL_KEY="your-fal-key"
 ELEVENLABS_API_KEY="your-elevenlabs-key"
 OPENAI_API_KEY="your-openai-key"
 ```
 
-### 5. Run it
+Run it:
 ```bash
 python run.py "https://www.rollonfriday.com/news-content/some-story"
 ```
