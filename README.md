@@ -48,8 +48,6 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 
 ## Setup
 
-Requires **Python 3.10+**.
-
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
