@@ -50,7 +50,7 @@ silent motion clip (Wan 2.2). Proven settings from earlier tests are recorded
 in the "Rules learned" and "Costs" sections below.
 
 - `costs.py` — price constants; every script prints its cost.
-- `WORKFLOW.md` — the same steps in plain English.
+- `README.md` — the same steps in plain English.
 
 ## Rules learned (do not relearn the hard way)
 - Everything must be **vertical 9:16** (TikTok). Wide video stretches the character.

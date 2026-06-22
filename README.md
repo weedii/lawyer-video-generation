@@ -1,0 +1,93 @@
+# Lawyer Microdrama Generator
+
+Turn real legal gossip stories into short, vertical **TikTok-style microdramas**
+aimed at young, high-paying lawyers — then use those accounts to sell ads to
+legal tech companies.
+
+Stories are sourced from legal gossip sites (e.g. RollOnFriday), then
+**fictionalized** but kept authentic: real names are removed, legal jargon is
+kept (the jargon is the hook for the target audience). Visual style follows
+shows like *Suits*, *Billions*, and *The Good Wife*.
+
+---
+
+## What works today: Link → Characters
+
+Give it a story link and it automatically:
+1. **Scrapes** the story (title, text, comments)
+2. **Organizes** it with a cheap AI model and **invents fictional characters**
+3. **Generates one image per character**
+
+then stops. Cost: **about 5 cents per story.**
+
+### Run it
+```bash
+.venv/bin/python run.py "https://www.rollonfriday.com/news-content/some-story"
+```
+
+`run.py` is the manager. It runs three steps in order:
+
+| Step | Script | What it does | Model | Cost |
+|------|--------|--------------|-------|------|
+| 1 | `scrape.py <url>` | Download story + comments | — | free |
+| 2 | `analyze.py` | Organize + invent fictional characters | OpenAI gpt-4o-mini | ~$0.001 |
+| 3 | `gen_characters.py` | One vertical image per character | fal.ai FLUX dev | $0.025 each |
+
+### Results (in `output/`)
+- `analysis.md` — easy-to-read summary + characters
+- `analysis.json` — everything together (story, characters, image file names)
+- `char_*.png` — one image per character
+
+### How names are kept fictional (reliably)
+`analyze.py` uses a guardrail instead of just "asking nicely":
+1. First it lists **every real name** in the article.
+2. Then it **bans those exact words** when writing the analysis.
+3. Then it **scans the output** and **retries** if any real name slipped through.
+
+---
+
+## Setup
+
+1. Python virtual environment with the libraries installed (`.venv/`).
+2. API keys in a `.env` file (not committed):
+   ```
+   FAL_KEY="..."
+   ELEVENLABS_API_KEY="..."
+   OPENAI_API_KEY="..."
+   ```
+
+## Files
+- `run.py` — manager (runs the whole link → characters stage)
+- `scrape.py`, `analyze.py`, `gen_characters.py` — the three pipeline steps
+- `costs.py` — price list; every script prints its cost
+- `.env` — API keys (ignored by git)
+
+---
+
+## Rules learned
+- Everything is **vertical 9:16** (TikTok). Wide video stretches the character.
+- Cheap AI video keeps a face consistent only with **tiny motion**; big action breaks it.
+- Microdramas are mostly **talking close-ups + captions + music**.
+- A talking video needs the **audio first** (the mouth copies the sound).
+- One **locked image per character**, reused every time = consistency.
+
+## Costs (estimates from provider pricing)
+- Scrape: free
+- Analyze (OpenAI gpt-4o-mini): ~$0.001 per story
+- Character image (FLUX dev): $0.025 each
+- Voice (ElevenLabs): billed by characters *(next stage)*
+- Talking video (SadTalker): ~$0.05 *(next stage)*
+- Silent vertical clip (Wan 2.2): $0.15 *(next stage)*
+
+---
+
+## Next stage (not built yet)
+Characters → talking video: story → short script (who says what) → voices
+(ElevenLabs) → talking lip-synced clips → captions + music → final vertical video.
+Built fresh, one script at a time, all reading from `output/analysis.json`.
+
+## Final vision (later)
+Fully automated pipeline: scrape sources → score stories (good vs. bad) →
+storyboard + drama arc → generate full video with consistent characters →
+publish to TikTok accounts → sell ads to legal tech companies.
+**Quality first, automation second.**
