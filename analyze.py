@@ -65,6 +65,7 @@ Return ONLY valid JSON with exactly this shape:
     {
       "fictional_name": "invented, realistic, culturally-fitting name",
       "role": "their role in the story (e.g. struck-off solicitor, her barrister father)",
+      "gender": "male or female (exactly one of these two words)",
       "personality": "VERY DETAILED paragraph: their character, temperament, motivations, how they behave under pressure, flaws and strengths — all justified by the story and their role.",
       "appearance": "VERY DETAILED physical description for image generation: age, gender, ethnicity, face shape, skin, eyes, eyebrows, nose, mouth, hair style and colour, facial hair, body build, posture, typical clothing, and any distinguishing features. Make the look fit their personality and role.",
       "image_prompt": "ONE clean prompt that combines the look into a single line, cinematic Suits/Billions TV-drama style, photorealistic, professional vertical portrait. No real names."
@@ -112,7 +113,8 @@ def leaked_names(result: dict, banned: list[str]) -> list[str]:
 
 
 def analyze(story: dict) -> tuple[dict, float]:
-    client = OpenAI(api_key=KEY)
+    # timeout: don't hang forever if OpenAI is slow. max_retries: auto-retry.
+    client = OpenAI(api_key=KEY, timeout=45.0, max_retries=3)
     total_cost = 0.0
 
     # Step 1: find the real names so we can ban them explicitly.

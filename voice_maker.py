@@ -45,9 +45,14 @@ def slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
 
-def guess_gender(character: dict) -> str:
-    """Best guess from the character's description. Checks female first
+def character_gender(character: dict) -> str:
+    """Use the explicit 'gender' field from analyze.py. If it is missing (older
+    files), fall back to guessing from the description. Checks female first
     because the word 'woman' contains 'man'."""
+    gender = str(character.get("gender", "")).strip().lower()
+    if gender in ("male", "female"):
+        return gender
+
     text = (
         f"{character.get('role', '')} {character.get('appearance', '')} "
         f"{character.get('personality', '')}"
@@ -63,7 +68,7 @@ def assign_voices(characters: list[dict]) -> dict:
     f_i, m_i = 0, 0
     for c in characters:
         name = c["fictional_name"]
-        if guess_gender(c) == "female":
+        if character_gender(c) == "female":
             mapping[name] = FEMALE_VOICES[f_i % len(FEMALE_VOICES)]
             f_i += 1
         else:

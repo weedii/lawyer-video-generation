@@ -6,7 +6,9 @@ You give it a story link. It runs the other scripts in order:
     3. gen_characters.py  -> make one image per character
     4. scene_writer.py    -> write the scene script (who says what)
     5. voice_maker.py     -> make the voice for every line
-Then it STOPS.
+    6. talking_clips.py   -> make a talking clip for every line
+    7. assemble.py        -> join the clips into the final video
+The result is output/final_video.mp4.
 
 Usage:
     python run.py "https://www.rollonfriday.com/news-content/some-story"
@@ -35,15 +37,16 @@ if __name__ == "__main__":
     url = sys.argv[1]
 
     # The steps, in order. scrape needs the link; the others read files.
-    step("STEP 1/5", "Scrape the story", ["scrape.py", url])
-    step("STEP 2/5", "Analyze story + invent characters", ["analyze.py"])
-    step("STEP 3/5", "Make an image for each character", ["gen_characters.py"])
-    step("STEP 4/5", "Write the scene script", ["scene_writer.py"])
-    step("STEP 5/5", "Make the voice for every line", ["voice_maker.py"])
+    step("STEP 1/7", "Scrape the story", ["scrape.py", url])
+    step("STEP 2/7", "Analyze story + invent characters", ["analyze.py"])
+    step("STEP 3/7", "Make an image for each character", ["gen_characters.py"])
+    step("STEP 4/7", "Write the scene script", ["scene_writer.py"])
+    step("STEP 5/7", "Make the voice for every line", ["voice_maker.py"])
+    step("STEP 6/7", "Make a talking clip for every line", ["talking_clips.py"])
+    step("STEP 7/7", "Join the clips into the final video", ["assemble.py"])
 
     print("\n" + "=" * 55, flush=True)
     print("  ALL DONE", flush=True)
     print("=" * 55, flush=True)
+    print("Final video:      output/final_video.mp4", flush=True)
     print("Read everything:  output/analysis.md", flush=True)
-    print("Character images: output/char_*.png", flush=True)
-    print("Voice lines:      output/voice_*.mp3", flush=True)

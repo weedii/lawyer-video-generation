@@ -55,7 +55,8 @@ Return ONLY valid JSON with exactly this shape:
 
 
 def write_script(data: dict) -> tuple[dict, float]:
-    client = OpenAI(api_key=KEY)
+    # timeout: don't hang forever if OpenAI is slow. max_retries: auto-retry.
+    client = OpenAI(api_key=KEY, timeout=45.0, max_retries=3)
 
     # Give the model the story and the cast it must use.
     cast = "\n".join(

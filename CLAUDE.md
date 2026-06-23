@@ -31,23 +31,22 @@ Grow one or several accounts, then **sell ads to legal tech companies**.
 ## What is built (the working pipeline)
 Run from the project root with the venv activated (`source .venv/bin/activate`), then use `python`.
 
-### STAGE 1 — Link → Characters (AUTOMATED)
-One command: `python run.py "<story-url>"`. `run.py` is the manager; it runs:
+One command does everything: `python run.py "<story-url>"` → `output/final_video.mp4`.
+`run.py` is the manager; it runs 7 steps in order:
 
 | Step | Script | Model | Output | Cost |
 |------|--------|-------|--------|------|
 | 1. Scrape story | `scrape.py <url>` | — | `output/scraped.json` | free |
-| 2. Analyze + invent characters | `analyze.py` | OpenAI gpt-4o-mini | `output/analysis.json` + `.md` | ~$0.001 |
-| 3. Character images | `gen_characters.py` | FLUX dev | `output/char_*.png` | $0.025 each |
+| 2. Analyze + invent characters | `analyze.py` | OpenAI gpt-4o-mini | `analysis.json` + `.md` | ~$0.001 |
+| 3. Character images (cinematic) | `gen_characters.py` | FLUX dev | `char_*.png` | $0.025 each |
+| 4. Scene script | `scene_writer.py` | OpenAI gpt-4o-mini | adds `script` to analysis.json | ~$0.001 |
+| 5. Voices | `voice_maker.py` | ElevenLabs | `voice_*.mp3` | by characters |
+| 6. Talking clips | `talking_clips.py` | Kling AI Avatar v2 | `clip_*.mp4` | $0.056/sec |
+| 7. Assemble | `assemble.py` | ffmpeg (local) | `final_video.mp4` | free |
 
-- Everything ends up in `output/analysis.json` (story, characters, image files).
+- Everything ends up in `output/analysis.json` (story, characters, script, files).
 - Names are auto-fictionalized and checked (see analyze.py: find names → ban → verify).
-
-### STAGE 2 — Characters → Talking video (NOT built yet)
-To be built fresh, one script at a time, reading from `output/analysis.json`.
-Planned pieces: voice (ElevenLabs), talking video (e.g. SadTalker), optional
-silent motion clip (Wan 2.2). Proven settings from earlier tests are recorded
-in the "Rules learned" and "Costs" sections below.
+- ~$1.30 per finished video. Optional `output/music.mp3` adds background music. No captions.
 
 - `costs.py` — price constants; every script prints its cost.
 - `README.md` — the same steps in plain English.
@@ -60,14 +59,12 @@ in the "Rules learned" and "Costs" sections below.
 - One **locked image per character**, reused every time = consistency.
 
 ## Current status
-- STAGE 1 automated: `run.py` takes a link → scrapes → analyzes → makes character images. ~$0.05 per story.
-- STAGE 2 not built yet. Earlier test scripts (gen_voice/gen_talk/gen_video) were deleted; we rebuild fresh, one script at a time, reading from analysis.json.
+- Full pipeline automated: `run.py` takes a link → final vertical video (~$1.30). Proven end to end.
 
 ## Next steps (in order)
-1. Build STAGE 2: story → short script (who says what) → voices → talking clips, all reading from `output/analysis.json`.
-2. Add captions + music; assemble the final vertical video.
-3. Judge quality. Upgrade models only where needed (show cost first).
-4. Once quality is reliably good → full automation (see below).
+1. Judge quality on a few videos; improve weak spots (script tone, voice fit, lip-sync).
+2. Editing variety: reaction shots, B-roll, zoom-ins, background music.
+3. Once quality is reliably good → full automation (see below).
 
 ---
 

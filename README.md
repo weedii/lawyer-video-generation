@@ -11,32 +11,35 @@ shows like *Suits*, *Billions*, and *The Good Wife*.
 
 ---
 
-## What works today: Link → Characters
+## What it does: Link → Final video
 
-Give it a story link and it automatically:
-1. **Scrapes** the story (title, text, comments)
-2. **Organizes** it with a cheap AI model and **invents fictional characters**
-3. **Generates one image per character**
-
-then stops. Cost: **about 5 cents per story.**
+Give it a story link and it automatically produces a finished vertical
+microdrama. Cost: **about $1.30 per video.**
 
 ### Run it
 ```bash
 python run.py "https://www.rollonfriday.com/news-content/some-story"
 ```
 
-`run.py` is the manager. It runs three steps in order:
+`run.py` is the manager. It runs seven steps in order:
 
 | Step | Script | What it does | Model | Cost |
 |------|--------|--------------|-------|------|
 | 1 | `scrape.py <url>` | Download story + comments | — | free |
 | 2 | `analyze.py` | Organize + invent fictional characters | OpenAI gpt-4o-mini | ~$0.001 |
-| 3 | `gen_characters.py` | One vertical image per character | fal.ai FLUX dev | $0.025 each |
+| 3 | `gen_characters.py` | One cinematic vertical image per character | fal.ai FLUX dev | $0.025 each |
+| 4 | `scene_writer.py` | Write the scene script (who says what) | OpenAI gpt-4o-mini | ~$0.001 |
+| 5 | `voice_maker.py` | One voice line per script line | ElevenLabs | by characters |
+| 6 | `talking_clips.py` | One talking clip per line | fal.ai Kling AI Avatar v2 | $0.056/sec |
+| 7 | `assemble.py` | Join the clips into the final video | ffmpeg (local) | free |
 
 ### Results (in `output/`)
-- `analysis.md` — easy-to-read summary + characters
-- `analysis.json` — everything together (story, characters, image file names)
-- `char_*.png` — one image per character
+- `final_video.mp4` — the finished vertical microdrama
+- `analysis.md` — easy-to-read story + characters + script
+- `analysis.json` — everything together (story, characters, script, files)
+- `char_*.png`, `voice_*.mp3`, `clip_*.mp4` — the building pieces
+
+Optional: drop an `output/music.mp3` and the final video gets background music.
 
 ### How names are kept fictional (reliably)
 `analyze.py` uses a guardrail instead of just "asking nicely":
@@ -67,8 +70,9 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 ```
 
 ## Files
-- `run.py` — manager (runs the whole link → characters stage)
-- `scrape.py`, `analyze.py`, `gen_characters.py` — the three pipeline steps
+- `run.py` — manager (runs the whole link → final video pipeline)
+- `scrape.py`, `analyze.py`, `gen_characters.py` — story → characters + images
+- `scene_writer.py`, `voice_maker.py`, `talking_clips.py`, `assemble.py` — script → voices → clips → video
 - `costs.py` — price list; every script prints its cost
 - `requirements.txt` — the Python libraries to install
 - `.env` — API keys (ignored by git)
@@ -78,24 +82,24 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 ## Rules learned
 - Everything is **vertical 9:16** (TikTok). Wide video stretches the character.
 - Cheap AI video keeps a face consistent only with **tiny motion**; big action breaks it.
-- Microdramas are mostly **talking close-ups + captions + music**.
+- Talking-avatar models animate one portrait; the cinematic feel comes from the
+  setting baked into the image + editing, not from one clip.
 - A talking video needs the **audio first** (the mouth copies the sound).
 - One **locked image per character**, reused every time = consistency.
 
 ## Costs (estimates from provider pricing)
 - Scrape: free
-- Analyze (OpenAI gpt-4o-mini): ~$0.001 per story
+- Analyze + script (OpenAI gpt-4o-mini): ~$0.002 per story
 - Character image (FLUX dev): $0.025 each
-- Voice (ElevenLabs): billed by characters *(next stage)*
-- Talking video (SadTalker): ~$0.05 *(next stage)*
-- Silent vertical clip (Wan 2.2): $0.15 *(next stage)*
+- Voice (ElevenLabs): billed by characters
+- Talking clip (Kling AI Avatar v2): $0.056 per second of video
+- **Roughly $1.30 for one finished video**
 
 ---
 
-## Next stage (not built yet)
-Characters → talking video: story → short script (who says what) → voices
-(ElevenLabs) → talking lip-synced clips → captions + music → final vertical video.
-Built fresh, one script at a time, all reading from `output/analysis.json`.
+## Next improvements
+- Background music (drop `output/music.mp3`).
+- Editing variety: reaction shots, B-roll, zoom-ins between lines.
 
 ## Final vision (later)
 Fully automated pipeline: scrape sources → score stories (good vs. bad) →

@@ -31,12 +31,17 @@ if not os.getenv("FAL_KEY"):
 MODEL = "fal-ai/flux/dev"
 OUT_DIR = "output"
 
-# Same look added to EVERY character so the whole show matches visually,
-# no matter how each prompt was worded.
+# Same cinematic look added to EVERY character so the whole show matches.
+# This puts the character INSIDE a real setting (not a plain studio portrait),
+# so the talking clips feel like a scene from a TV drama. We keep a medium shot
+# (waist up) so the face stays clear enough for good lip-sync.
 STYLE = (
-    "Cinematic Suits/Billions TV-drama style, soft key light, shallow depth of "
-    "field, neutral studio background, photorealistic, 35mm, head and shoulders, "
-    "looking at camera."
+    "Cinematic film still from a legal TV drama in the style of Suits and "
+    "Billions. The character is inside a realistic setting — a modern "
+    "glass-walled law office at night with a blurred city skyline behind them. "
+    "Moody dramatic lighting, warm key light, shallow depth of field, 35mm film "
+    "look, photorealistic. Medium shot, waist up, face clearly visible. "
+    "Vertical 9:16 composition."
 )
 
 

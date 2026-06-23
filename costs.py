@@ -18,6 +18,9 @@ ELEVENLABS_PER_1K_CHARS = 0.30
 # Typical short clip lands around this. We confirm the real number after running.
 SADTALKER_PER_CLIP_EST = 0.05
 
+# Kling AI Avatar v2 (standard): realistic talking video, billed per second.
+KLING_AVATAR_PER_SEC = 0.056
+
 # OpenAI gpt-4o-mini: a very cheap text model. Priced per 1 million tokens.
 # (Tokens = pieces of words. We compute the real cost from what the API reports.)
 OPENAI_INPUT_PER_1M = 0.15    # $ per 1,000,000 input tokens
