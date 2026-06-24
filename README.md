@@ -14,7 +14,8 @@ shows like *Suits*, *Billions*, and *The Good Wife*.
 ## What it does: Link → Final video
 
 Give it a story link and it automatically produces a finished vertical
-microdrama. Cost: **about $1.30 per video.**
+microdrama: a **narrator hook**, the characters acting out the scene, and a
+**cliffhanger** ending. Cost: **about $3.50 per video.**
 
 ### Run it
 ```bash
@@ -27,11 +28,11 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 |------|--------|--------------|-------|------|
 | 1 | `scrape.py <url>` | Download story + comments | — | free |
 | 2 | `analyze.py` | Organize + invent fictional characters | OpenAI gpt-4o-mini | ~$0.001 |
-| 3 | `gen_characters.py` | One cinematic vertical image per character | fal.ai FLUX dev | $0.025 each |
+| 3 | `gen_characters.py` | One cinematic vertical image per character | fal.ai Nano Banana Pro (2K) | $0.15 each |
 | 4 | `scene_writer.py` | Write the scene script (who says what) | OpenAI gpt-4o-mini | ~$0.001 |
-| 5 | `voice_maker.py` | One voice line per script line | ElevenLabs | by characters |
-| 6 | `talking_clips.py` | One talking clip per line | fal.ai Kling AI Avatar v2 | $0.056/sec |
-| 7 | `assemble.py` | Join the clips into the final video | ffmpeg (local) | free |
+| 5 | `voice_maker.py` | One voice line per script line (narrator + characters) | ElevenLabs | by characters |
+| 6 | `talking_clips.py` | Talking clip per line; narrator lines become establishing shots | Kling AI Avatar v2 + FLUX dev | $0.056/sec |
+| 7 | `assemble.py` | Trim each clip to its audio, then join into the final video | ffmpeg (local) | free |
 
 ### Results (in `output/`)
 - `final_video.mp4` — the finished vertical microdrama
@@ -86,14 +87,20 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
   setting baked into the image + editing, not from one clip.
 - A talking video needs the **audio first** (the mouth copies the sound).
 - One **locked image per character**, reused every time = consistency.
+- Talking-avatar models **pad clips longer than the audio** (Kling outputs a
+  fixed ~7.2s block). We fix it by **trimming each clip to its audio length**
+  when merging — model-independent and free.
+- The character-image model (Nano Banana Pro) can drift to landscape, so the
+  prompt forces a tall vertical portrait.
 
 ## Costs (estimates from provider pricing)
 - Scrape: free
 - Analyze + script (OpenAI gpt-4o-mini): ~$0.002 per story
-- Character image (FLUX dev): $0.025 each
+- Character image (Nano Banana Pro, 2K): $0.15 each
+- Establishing shot (FLUX dev, no people): $0.025
 - Voice (ElevenLabs): billed by characters
 - Talking clip (Kling AI Avatar v2): $0.056 per second of video
-- **Roughly $1.30 for one finished video**
+- **Roughly $3.50 for one finished video**
 
 ---
 

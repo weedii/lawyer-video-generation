@@ -39,6 +39,10 @@ MALE_VOICES = [
     "nPczCjzI2devNBz1zQrb",  # Brian - calm
 ]
 
+# Fixed voice for the Narrator (the intro hook + the cliffhanger voiceover).
+# Daniel - deep, authoritative, documentary/narration feel.
+NARRATOR_VOICE = "onwK4e9ZLuTAKqWW03F9"
+
 
 def slug(name: str) -> str:
     """Turn 'Leo Finnegan' into 'leo_finnegan' for safe file names."""
@@ -108,7 +112,7 @@ def main():
     print("Voice for each character:")
     for name, vid in voices.items():
         print(f"  {name} -> {vid}")
-    print()
+    print(f"  Narrator -> {NARRATOR_VOICE}\n")
 
     # Step 2: make one audio file per line, in order.
     lines = script["lines"]
@@ -116,7 +120,12 @@ def main():
     print(f"Making {len(lines)} voice lines ...")
     for i, ln in enumerate(lines, 1):
         name = ln["character"]
-        voice_id = voices.get(name)
+        # Narration lines use the fixed narrator voice (the narrator is not part
+        # of the cast). Everyone else uses their assigned character voice.
+        if ln.get("type") == "narration" or name == "Narrator":
+            voice_id = NARRATOR_VOICE
+        else:
+            voice_id = voices.get(name)
         if not voice_id:
             # The script named someone not in the cast; skip safely.
             print(f"  [{i}] WARNING: no voice for '{name}', skipping.")

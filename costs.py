@@ -4,22 +4,24 @@ so we always know what we spent.
 """
 
 # FLUX.1 [dev]: $0.025 per megapixel, rounded up to nearest megapixel.
-# We generate 720x1280 = 0.92 MP -> rounds up to 1 MP -> $0.025 per image.
+# Still used for the (no-people) establishing shot, where cheap is fine.
 FLUX_DEV_PER_IMAGE = 0.025
 
-# Wan 2.2 5B image-to-video: $0.15 per clip. Does real vertical 9:16 (TikTok).
-WAN_VIDEO_PER_CLIP = 0.15
+# Nano Banana Pro (Google Gemini 3 Pro Image): top-tier photorealistic people,
+# used for the character images. $0.15 per image at 1K/2K (4K would be double).
+NANO_BANANA_PRO_PER_IMAGE = 0.15
 
 # ElevenLabs: billed by characters from your plan quota (not per-call dollars).
 # Rough upper-bound estimate so we see a number. Real cost depends on your plan.
 ELEVENLABS_PER_1K_CHARS = 0.30
 
-# SadTalker: cheapest talking model, billed by compute time (varies).
-# Typical short clip lands around this. We confirm the real number after running.
-SADTALKER_PER_CLIP_EST = 0.05
-
-# Kling AI Avatar v2 (standard): realistic talking video, billed per second.
+# Talking-video model (current): Kling AI Avatar v2 standard, per second of video.
+# Tradeoff: pads short clips to a fixed ~7.2s block (assemble.py trims that off).
 KLING_AVATAR_PER_SEC = 0.056
+
+# OmniHuman 1.5 (alternative, not currently wired): $0.16/sec, 1080p, and its
+# length matches the audio. ~3x Kling — kept here in case we switch back.
+OMNIHUMAN_PER_SEC = 0.16
 
 # OpenAI gpt-4o-mini: a very cheap text model. Priced per 1 million tokens.
 # (Tokens = pieces of words. We compute the real cost from what the API reports.)

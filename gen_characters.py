@@ -12,7 +12,7 @@ Reads:  output/analysis.json    (from analyze.py)
 Output: output/char_<name>.png  (one image per character)
         It also writes the image file name back INTO analysis.json (each
         character gets a "file" field), so everything stays in one place.
-Cost:   $0.025 per character image (FLUX dev).
+Cost:   $0.15 per character image (Nano Banana Pro).
 """
 import os
 import sys
@@ -28,20 +28,23 @@ load_dotenv()
 if not os.getenv("FAL_KEY"):
     sys.exit("ERROR: FAL_KEY is empty. Open .env and paste your fal.ai key.")
 
-MODEL = "fal-ai/flux/dev"
+MODEL = "fal-ai/nano-banana-pro"   # top-tier photorealistic people
 OUT_DIR = "output"
 
 # Same cinematic look added to EVERY character so the whole show matches.
 # This puts the character INSIDE a real setting (not a plain studio portrait),
 # so the talking clips feel like a scene from a TV drama. We keep a medium shot
 # (waist up) so the face stays clear enough for good lip-sync.
+# NOTE: avoid "film still"/widescreen cues — they make the model produce a
+# landscape image even when we ask for 9:16. We push hard for a TALL vertical
+# portrait so the character comes out upright in a 9:16 frame.
 STYLE = (
-    "Cinematic film still from a legal TV drama in the style of Suits and "
-    "Billions. The character is inside a realistic setting — a modern "
-    "glass-walled law office at night with a blurred city skyline behind them. "
-    "Moody dramatic lighting, warm key light, shallow depth of field, 35mm film "
-    "look, photorealistic. Medium shot, waist up, face clearly visible. "
-    "Vertical 9:16 composition."
+    "Cinematic vertical portrait photo, tall 9:16 aspect ratio, portrait "
+    "orientation, subject standing upright and centered. In the visual style of "
+    "a prestige legal TV drama. The character is inside a modern glass-walled law "
+    "office at night with a blurred city skyline behind them. Moody dramatic "
+    "lighting, shallow depth of field, photorealistic. Waist-up framing, face "
+    "clearly visible."
 )
 
 
@@ -53,16 +56,16 @@ def slug(name: str) -> str:
 
 
 def make_image(prompt: str, out_path: str):
-    """Send one prompt to fal.ai and save the returned image."""
+    """Send one prompt to Nano Banana Pro and save the returned image.
+    Nano Banana takes an aspect_ratio + resolution (not width/height like FLUX).
+    9:16 = vertical for TikTok; 2K keeps the face sharp (same price as 1K)."""
     result = fal_client.subscribe(
         MODEL,
         arguments={
             "prompt": prompt,
-            "image_size": {"width": 720, "height": 1280},  # vertical 9:16 for TikTok
             "num_images": 1,
-            "num_inference_steps": 28,
-            "guidance_scale": 3.5,
-            "enable_safety_checker": True,
+            "aspect_ratio": "9:16",
+            "resolution": "2K",
         },
         with_logs=False,
     )
@@ -98,7 +101,7 @@ def main():
         make_image(prompt, out_path)
         print(f"  saved {out_path}")
 
-        total_cost += costs.FLUX_DEV_PER_IMAGE
+        total_cost += costs.NANO_BANANA_PRO_PER_IMAGE
         # Write the image file name back into this character, so everything
         # lives in one place (analysis.json). Next steps read it from here.
         c["file"] = file_name
