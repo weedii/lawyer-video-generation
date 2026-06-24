@@ -4,7 +4,8 @@ so we always know what we spent.
 """
 
 # FLUX.1 [dev]: $0.025 per megapixel, rounded up to nearest megapixel.
-# Still used for the (no-people) establishing shot, where cheap is fine.
+# Used for the (no-people) establishing shot and the anonymous "Person A/B"
+# silhouettes — both cheap shots where photorealistic faces aren't needed.
 FLUX_DEV_PER_IMAGE = 0.025
 
 # Nano Banana Pro (Google Gemini 3 Pro Image): top-tier photorealistic people,

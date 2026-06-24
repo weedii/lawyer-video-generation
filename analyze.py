@@ -53,8 +53,25 @@ HARD RULE — FICTIONALIZE EVERY NAME:
 - Keep everything else true to the article: the events, the legal details, the
   jargon, the drama. Only the names change.
 
+ANONYMOUS PEOPLE (very important):
+- Some people in the article are NOT named — they appear only as a placeholder
+  like "Person A", "Person B", "a junior colleague", "the complainant", "a
+  witness", or as initials. Real legal cases hide victims/witnesses this way.
+- INCLUDE these people as characters too (they speak in the scene), but:
+    * set "anonymous": true,
+    * KEEP their placeholder as the "fictional_name" exactly (e.g. "Person A"),
+    * do NOT invent a real-looking name and do NOT describe a face for them —
+      on screen we show them as a shadowy, unidentifiable silhouette.
+    * set "gender" if the article reveals it (e.g. "junior female colleagues"
+      -> female), otherwise "unknown".
+    * leave "appearance" and "image_prompt" as empty strings "".
+- A NAMED person is "anonymous": false and gets the FULL treatment below
+  (invented name, detailed appearance, image_prompt).
+
 For EACH character, write rich, detailed sections, all inferred from the story
-and their role (make sensible, authentic choices where the article is silent):
+and their role (make sensible, authentic choices where the article is silent).
+For anonymous characters, only "fictional_name", "role" and "gender" matter —
+keep "appearance" and "image_prompt" empty.
 
 Return ONLY valid JSON with exactly this shape:
 {
@@ -63,12 +80,13 @@ Return ONLY valid JSON with exactly this shape:
   "why_it_works": "1-2 sentences: why this is juicy for a lawyer audience",
   "characters": [
     {
-      "fictional_name": "invented, realistic, culturally-fitting name",
+      "fictional_name": "invented realistic name, OR the kept placeholder (e.g. 'Person A') if anonymous",
       "role": "their role in the story (e.g. struck-off solicitor, her barrister father)",
-      "gender": "male or female (exactly one of these two words)",
+      "anonymous": false,
+      "gender": "male, female, or unknown",
       "personality": "VERY DETAILED paragraph: their character, temperament, motivations, how they behave under pressure, flaws and strengths — all justified by the story and their role.",
-      "appearance": "VERY DETAILED physical description for image generation: age, gender, ethnicity, face shape, skin, eyes, eyebrows, nose, mouth, hair style and colour, facial hair, body build, posture, typical clothing, and any distinguishing features. Make the look fit their personality and role.",
-      "image_prompt": "ONE clean prompt that combines the look into a single line, cinematic Suits/Billions TV-drama style, photorealistic, professional vertical portrait. No real names."
+      "appearance": "VERY DETAILED physical description for image generation: age, gender, ethnicity, face shape, skin, eyes, eyebrows, nose, mouth, hair style and colour, facial hair, body build, posture, typical clothing, and any distinguishing features. Make the look fit their personality and role. (Empty string if anonymous.)",
+      "image_prompt": "ONE clean prompt that combines the look into a single line, cinematic Suits/Billions TV-drama style, photorealistic, professional vertical portrait. No real names. (Empty string if anonymous.)"
     }
   ]
 }
@@ -162,6 +180,10 @@ def analyze(story: dict) -> tuple[dict, float]:
         print(f"  Leaked real names {leaks}; retrying ...")
         extra = f"\nYou previously leaked these — they are STILL banned: {', '.join(leaks)}"
 
+    # Save the list of real names we banned, so later steps (scene_writer.py)
+    # can reuse the SAME ban list and never leak a real name into the script.
+    result["real_names"] = banned
+
     return result, total_cost
 
 
@@ -178,6 +200,12 @@ def write_markdown(data: dict, path: str):
 
     lines.append("## Characters")
     for c in data.get("characters", []):
+        # Anonymous people (Person A/B) are shown on screen as a silhouette,
+        # so flag them here instead of printing empty appearance fields.
+        if c.get("anonymous"):
+            lines.append(f"\n### {c['fictional_name']} — {c['role']} _(anonymous — silhouette)_")
+            lines.append(f"\n**Personality:** {c.get('personality', '')}")
+            continue
         lines.append(f"\n### {c['fictional_name']} — {c['role']}")
         lines.append(f"\n**Personality:** {c.get('personality', '')}")
         lines.append(f"\n**Appearance:** {c.get('appearance', '')}")
@@ -207,7 +235,8 @@ if __name__ == "__main__":
     print(f"\nSummary: {data['summary']}")
     print(f"Characters found: {len(data.get('characters', []))}")
     for c in data.get("characters", []):
-        print(f"  - {c['fictional_name']} ({c['role']})")
+        tag = " [anonymous]" if c.get("anonymous") else ""
+        print(f"  - {c['fictional_name']} ({c['role']}){tag}")
 
     print("\nSaved -> output/analysis.json and output/analysis.md")
     costs.show("OpenAI story analysis", cost)

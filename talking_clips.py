@@ -7,6 +7,10 @@ For each NARRATION line (the intro hook + the cliffhanger): there is no talking
 face, so instead we show a cinematic ESTABLISHING SHOT of the scene's setting
 with the narrator's voice over it (a cheap static-image video, no Kling).
 
+For each ANONYMOUS speaker (Person A/B — people the story doesn't name): there
+is no face to lip-sync, so we hold their silhouette image over their voice (a
+static-image video, free, no Kling), keeping the conversation back-and-forth.
+
 Usage:
     python talking_clips.py
 
@@ -106,6 +110,18 @@ def make_narration_clip(image_path: str, audio_path: str, out_path: str):
     ], check=True, capture_output=True)
 
 
+def ensure_establishing(setting: str) -> tuple[str, float]:
+    """Make the establishing image once (if it's missing) and return its path
+    plus the cost added (0.0 if it already existed). Used for narrator lines and
+    as a safe fallback for any speaker we have no face for."""
+    est_path = os.path.join(OUT_DIR, ESTABLISHING_FILE)
+    if os.path.exists(est_path):
+        return est_path, 0.0
+    print("  generating establishing shot ...")
+    make_establishing_image(setting, est_path)
+    return est_path, costs.FLUX_DEV_PER_IMAGE
+
+
 def main():
     analysis_path = os.path.join(OUT_DIR, "analysis.json")
     if not os.path.exists(analysis_path):
@@ -118,10 +134,13 @@ def main():
     if not script or not script.get("lines"):
         sys.exit("No script found. Run scene_writer.py first.")
 
-    # Map each character name to their image file.
-    image_file = {c["fictional_name"]: c.get("file") for c in data.get("characters", [])}
+    # Map each character name to their image file, and note who is anonymous.
+    characters = data.get("characters", [])
+    image_file = {c["fictional_name"]: c.get("file") for c in characters}
+    anonymous_names = {c["fictional_name"] for c in characters if c.get("anonymous")}
 
     uploaded_image = {}        # cache: character name -> uploaded image URL
+    setting = script.get("setting", "a law office")
 
     lines = script["lines"]
     made = 0
@@ -139,13 +158,8 @@ def main():
 
         # --- NARRATION line: static establishing shot + voiceover ---
         if ln.get("type") == "narration" or name == "Narrator":
-            est_path = os.path.join(OUT_DIR, ESTABLISHING_FILE)
-            # Generate the establishing image once, then reuse it.
-            if not os.path.exists(est_path):
-                print("  generating establishing shot ...")
-                make_establishing_image(script.get("setting", "a law office"), est_path)
-                image_cost += costs.FLUX_DEV_PER_IMAGE
-
+            est_path, added = ensure_establishing(setting)
+            image_cost += added
             file_name = f"clip_{i:02d}_narrator.mp4"
             out_path = os.path.join(OUT_DIR, file_name)
             make_narration_clip(est_path, audio_path, out_path)
@@ -154,10 +168,39 @@ def main():
             print(f"  [{i}] Narrator: saved {file_name} (establishing shot)")
             continue
 
+        # --- ANONYMOUS speaker (Person A/B): no face to lip-sync. Hold their
+        # silhouette image over their voice (free ffmpeg), like a narration shot
+        # but with the silhouette. This keeps the back-and-forth conversation. ---
+        if name in anonymous_names:
+            sil_file = image_file.get(name)
+            file_name = f"clip_{i:02d}_{slug(name)}.mp4"
+            out_path = os.path.join(OUT_DIR, file_name)
+            if sil_file:
+                make_narration_clip(os.path.join(OUT_DIR, sil_file), audio_path, out_path)
+            else:
+                # Silhouette missing for some reason — fall back to the
+                # establishing shot so the line is still heard, never dropped.
+                est_path, added = ensure_establishing(setting)
+                image_cost += added
+                make_narration_clip(est_path, audio_path, out_path)
+            ln["clip"] = file_name
+            made += 1
+            print(f"  [{i}] {name}: saved {file_name} (silhouette)")
+            continue
+
         # --- DIALOGUE line: Kling talking face ---
         img_file = image_file.get(name)
         if not img_file:
-            print(f"  [{i}] WARNING: no image for '{name}', skipping.")
+            # Named speaker but no face image (unexpected). Don't drop the line —
+            # render it over the establishing shot so the scene stays complete.
+            est_path, added = ensure_establishing(setting)
+            image_cost += added
+            file_name = f"clip_{i:02d}_{slug(name)}.mp4"
+            out_path = os.path.join(OUT_DIR, file_name)
+            make_narration_clip(est_path, audio_path, out_path)
+            ln["clip"] = file_name
+            made += 1
+            print(f"  [{i}] {name}: saved {file_name} (no image, used establishing shot)")
             continue
 
         file_name = f"clip_{i:02d}_{slug(name)}.mp4"

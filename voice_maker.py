@@ -122,14 +122,18 @@ def main():
         name = ln["character"]
         # Narration lines use the fixed narrator voice (the narrator is not part
         # of the cast). Everyone else uses their assigned character voice.
+        # Anonymous people (Person A/B) ARE in the cast, so assign_voices already
+        # gave them a gender-matched voice here — they are voiced like anyone else.
         if ln.get("type") == "narration" or name == "Narrator":
             voice_id = NARRATOR_VOICE
         else:
             voice_id = voices.get(name)
         if not voice_id:
-            # The script named someone not in the cast; skip safely.
-            print(f"  [{i}] WARNING: no voice for '{name}', skipping.")
-            continue
+            # The script named someone not in the cast. Don't drop the line
+            # (that silently breaks the conversation) — voice it with the
+            # narrator voice so it is still heard.
+            print(f"  [{i}] note: '{name}' not in cast, using narrator voice.")
+            voice_id = NARRATOR_VOICE
 
         file_name = f"voice_{i:02d}_{slug(name)}.mp3"
         out_path = os.path.join(OUT_DIR, file_name)

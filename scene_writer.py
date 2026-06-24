@@ -18,6 +18,7 @@ Cost:   ~$0.001 (cheap OpenAI model).
 import os
 import sys
 import json
+import re
 from dotenv import load_dotenv
 from openai import OpenAI
 import costs
@@ -40,6 +41,9 @@ based on a REAL legal news story. Make a tight, ORGANIZED scene with a clear arc
 
 Speakers:
 - Use ONLY the given characters (their exact names) for dialogue.
+- Some characters are marked "(anonymous)" — these are real but unnamed people
+  in the story (e.g. "Person A", a junior colleague). USE them as normal
+  speakers with their exact label; they are essential to the back-and-forth.
 - Also use a "Narrator" for short voiceover lines (the hook and the cliffhanger).
 
 STRUCTURE (this is the whole point — give it a beginning, middle and end):
@@ -89,16 +93,33 @@ def clean_lines(script: dict) -> dict:
     return script
 
 
+def leaked_names(script: dict, banned: list[str]) -> list[str]:
+    """Check if any banned REAL name still appears anywhere in the script. Same
+    whole-word check analyze.py uses, so 'Bar' inside 'Barrister' doesn't count."""
+    blob = json.dumps(script).lower()
+    leaks = []
+    for name in banned:
+        if re.search(rf"\b{re.escape(name.lower())}\b", blob):
+            leaks.append(name)
+    return leaks
+
+
 def write_script(data: dict, story_body: str) -> tuple[dict, float]:
     # timeout: don't hang forever if OpenAI is slow. max_retries: auto-retry.
     client = OpenAI(api_key=KEY, timeout=45.0, max_retries=3)
 
     # Build the cast list the writer must use (name, role, gender, personality).
+    # Mark anonymous people so the writer knows they are real speakers to include.
     cast = "\n".join(
-        f"- {c['fictional_name']} ({c['role']}, {c.get('gender', '')}): "
-        f"{c.get('personality', '')}"
+        f"- {c['fictional_name']}{' (anonymous)' if c.get('anonymous') else ''} "
+        f"({c['role']}, {c.get('gender', '')}): {c.get('personality', '')}"
         for c in data.get("characters", [])
     )
+
+    # The REAL names that analyze.py already replaced. We reuse the SAME list so
+    # the script can never leak a real name (e.g. the narrator saying "Griffiths"
+    # instead of the fictional "Lawrence Cartwright").
+    banned = data.get("real_names", [])
 
     # Give the model the REAL story facts (the scraped body) plus the summary,
     # so the dialogue can use specific events instead of generic emotion.
@@ -112,21 +133,46 @@ def write_script(data: dict, story_body: str) -> tuple[dict, float]:
         f"CAST (use only these names for dialogue):\n{cast}"
     )
 
-    print(f"Writing the script with {MODEL} ...")
-    resp = client.chat.completions.create(
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.8,  # a bit more creative for drama
-    )
+    # Generate, then leak-check against the banned real names. Retry once if any
+    # real name slipped through, telling the model exactly which to replace.
+    total_cost = 0.0
+    extra = ""
+    script = {}
+    for attempt in range(2):
+        ban_note = ""
+        if banned:
+            ban_note = (
+                "\n\nBANNED NAMES — these REAL names appear in the source story. "
+                "NEVER write any of them in ANY line (narration or dialogue). Use "
+                "ONLY the fictional cast names you are given instead:\n"
+                f"{', '.join(banned)}{extra}"
+            )
+        print(f"Writing the script with {MODEL} ... (attempt {attempt + 1})")
+        resp = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT + ban_note},
+                {"role": "user", "content": user_content},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.8,  # a bit more creative for drama
+        )
+        total_cost += costs.openai_cost(
+            resp.usage.prompt_tokens, resp.usage.completion_tokens
+        )
+        script = clean_lines(json.loads(resp.choices[0].message.content))
 
-    script = json.loads(resp.choices[0].message.content)
-    script = clean_lines(script)  # drop any malformed entries before we use it
-    cost = costs.openai_cost(resp.usage.prompt_tokens, resp.usage.completion_tokens)
-    return script, cost
+        leaks = leaked_names(script, banned)
+        if not leaks:
+            break  # clean script, done
+        # A real name slipped through — name them and retry once.
+        print(f"  Leaked real names {leaks}; rewriting ...")
+        extra = (
+            f"\nYou previously leaked these — they are STILL banned: "
+            f"{', '.join(leaks)}. Replace each with the matching fictional cast character."
+        )
+
+    return script, total_cost
 
 
 def append_markdown(script: dict, path: str):
