@@ -228,6 +228,15 @@ def main():
         total_seconds += seconds
         print(f"  [{i}] {name}: saved {file_name} ({seconds:.1f}s)")
 
+    clip_cost = total_seconds * costs.KLING_AVATAR_PER_SEC + image_cost
+
+    # Record this step's real cost for the end-of-pipeline summary, naming the
+    # models: Kling AI Avatar v2 for the talking clips, FLUX dev for the shot.
+    est_note = " + FLUX dev establishing shot" if image_cost else ""
+    costs.record(data, "clips",
+                 f"Talking clips - Kling AI Avatar v2 std ({total_seconds:.1f}s){est_note}",
+                 clip_cost)
+
     # Save the clip file names back into analysis.json (one place for all).
     with open(analysis_path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -235,7 +244,7 @@ def main():
     print("\nUpdated output/analysis.json with the clips.")
     costs.show(
         f"{made} clips ({total_seconds:.1f}s Kling + establishing image)",
-        total_seconds * costs.KLING_AVATAR_PER_SEC + image_cost,
+        clip_cost,
     )
 
 

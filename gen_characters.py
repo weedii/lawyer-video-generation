@@ -119,29 +119,40 @@ def make_silhouette(out_path: str, gender: str):
 
 
 def add_label(image_path: str, text: str):
-    """Burn a TV-style lower-third label (e.g. "PERSON A") onto the silhouette,
-    so the viewer instantly reads it as an anonymized person. Done with Pillow
-    because the local ffmpeg has no drawtext filter."""
+    """Burn a TV-style lower-third label (e.g. "JUNIOR ASSOCIATE") onto the
+    silhouette, so the viewer instantly reads it as an anonymized person. Done
+    with Pillow because the local ffmpeg has no drawtext filter."""
     img = Image.open(image_path).convert("RGB")
     draw = ImageDraw.Draw(img, "RGBA")
     w, h = img.size
+    label = text.upper()
 
-    # Try a real bold system font (macOS paths); fall back to Pillow's default.
-    font = None
+    # Find a usable bold system font file (macOS paths).
+    font_path = None
     for path in (
         "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
         "/Library/Fonts/Arial.ttf",
     ):
-        try:
-            font = ImageFont.truetype(path, size=int(w * 0.085))
+        if os.path.exists(path):
+            font_path = path
             break
-        except OSError:
-            continue
-    if font is None:
-        font = ImageFont.load_default()
 
-    label = text.upper()
+    # Pick the biggest font size whose label still fits within the frame width
+    # (with margins), so longer role labels never run off the edge.
+    max_width = int(w * 0.82)
+    size = int(w * 0.085)
+    if font_path:
+        font = ImageFont.truetype(font_path, size)
+        while size > 12:
+            bbox = draw.textbbox((0, 0), label, font=font)
+            if bbox[2] - bbox[0] <= max_width:
+                break
+            size -= 2
+            font = ImageFont.truetype(font_path, size)
+    else:
+        font = ImageFont.load_default()   # no truetype available; best effort
+
     bbox = draw.textbbox((0, 0), label, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     x = (w - tw) // 2
@@ -195,6 +206,17 @@ def main():
         # Write the image file name back into this character, so everything
         # lives in one place (analysis.json). Next steps read it from here.
         c["file"] = file_name
+
+    # Record this step's real cost for the end-of-pipeline summary, naming the
+    # model used for each kind of image (portraits vs anonymous silhouettes).
+    named = sum(1 for c in characters if not c.get("anonymous"))
+    anon = sum(1 for c in characters if c.get("anonymous"))
+    parts = []
+    if named:
+        parts.append(f"Nano Banana Pro x{named} portrait")
+    if anon:
+        parts.append(f"FLUX dev x{anon} silhouette")
+    costs.record(data, "images", "Character images - " + " + ".join(parts), total_cost)
 
     # Save the whole analysis file back, now with the image files included.
     with open(analysis_path, "w") as f:

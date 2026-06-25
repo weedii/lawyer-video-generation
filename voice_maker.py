@@ -156,11 +156,15 @@ def main():
         total_chars += len(spoken)
         print(f"  [{i}] {name}{f' [{emotion}]' if emotion else ''}: saved {file_name}")
 
+    # Record this step's cost for the end-of-pipeline summary (estimate).
+    est = total_chars / 1000 * costs.ELEVENLABS_PER_1K_CHARS
+    costs.record(data, "voices",
+                 f"Voices - ElevenLabs {MODEL_ID} (~{total_chars} chars)", est)
+
     # Save the voice + audio info back into analysis.json (one place for all).
     with open(analysis_path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-    est = total_chars / 1000 * costs.ELEVENLABS_PER_1K_CHARS
     print("\nUpdated output/analysis.json with voices + audio files.")
     costs.show(f"voices ({total_chars} characters, estimate)", est)
 

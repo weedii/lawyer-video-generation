@@ -54,17 +54,23 @@ HARD RULE — FICTIONALIZE EVERY NAME:
   jargon, the drama. Only the names change.
 
 ANONYMOUS PEOPLE (very important):
-- Some people in the article are NOT named — they appear only as a placeholder
-  like "Person A", "Person B", "a junior colleague", "the complainant", "a
-  witness", or as initials. Real legal cases hide victims/witnesses this way.
+- Some people in the article are NOT named — they appear only as "the women",
+  "a junior colleague", "the complainant", "a witness", "Person A", or initials.
+  Real legal cases hide victims/witnesses this way.
 - INCLUDE these people as characters too (they speak in the scene), but:
     * set "anonymous": true,
-    * KEEP their placeholder as the "fictional_name" exactly (e.g. "Person A"),
-    * do NOT invent a real-looking name and do NOT describe a face for them —
-      on screen we show them as a shadowy, unidentifiable silhouette.
+    * in "role", put a SHORT, clear job title (1-3 words) for their part in the
+      story — e.g. "Junior Associate", "Trainee Solicitor", "Paralegal", "Legal
+      Secretary", "Witness", "Complainant". We show anonymous people on screen
+      BY THIS ROLE (not by a name), so each anonymous person's role MUST be
+      DISTINCT — never repeat the same role.
+    * do NOT describe a face for them — on screen they are a shadowy,
+      unidentifiable silhouette with this role written on it.
     * set "gender" if the article reveals it (e.g. "junior female colleagues"
       -> female), otherwise "unknown".
     * leave "appearance" and "image_prompt" as empty strings "".
+    * "fictional_name" is ignored for anonymous people (we replace it with the
+      role), so don't worry about it.
 - A NAMED person is "anonymous": false and gets the FULL treatment below
   (invented name, detailed appearance, image_prompt).
 
@@ -80,7 +86,7 @@ Return ONLY valid JSON with exactly this shape:
   "why_it_works": "1-2 sentences: why this is juicy for a lawyer audience",
   "characters": [
     {
-      "fictional_name": "invented realistic name, OR the kept placeholder (e.g. 'Person A') if anonymous",
+      "fictional_name": "invented realistic name (ignored for anonymous people — they are shown by their role)",
       "role": "their role in the story (e.g. struck-off solicitor, her barrister father)",
       "anonymous": false,
       "gender": "male, female, or unknown",
@@ -117,6 +123,31 @@ def find_real_names(client, story: dict) -> tuple[list[str], float]:
     names = json.loads(resp.choices[0].message.content).get("names", [])
     cost = costs.openai_cost(resp.usage.prompt_tokens, resp.usage.completion_tokens)
     return names, cost
+
+
+def label_anonymous_by_role(result: dict) -> dict:
+    """Anonymous people should be shown by their ROLE, not a personal name.
+    The model reliably fills 'role' (e.g. "Junior Associate") but always sticks a
+    name in 'fictional_name' anyway — so here we just overwrite their name with
+    their role. We keep each label unique (add ' 2', ' 3' if a role repeats),
+    because the rest of the pipeline uses the name as the character's id."""
+    used = set()
+    # Reserve the real characters' names first so an anonymous role can't clash.
+    for c in result.get("characters", []):
+        if not c.get("anonymous"):
+            used.add(c.get("fictional_name", "").strip().lower())
+
+    for c in result.get("characters", []):
+        if not c.get("anonymous"):
+            continue
+        label = (c.get("role") or "Unnamed").strip()
+        base, n = label, 2
+        while label.lower() in used:     # make sure two roles never collide
+            label = f"{base} {n}"
+            n += 1
+        used.add(label.lower())
+        c["fictional_name"] = label      # show them by role, not a name
+    return result
 
 
 def leaked_names(result: dict, banned: list[str]) -> list[str]:
@@ -180,9 +211,17 @@ def analyze(story: dict) -> tuple[dict, float]:
         print(f"  Leaked real names {leaks}; retrying ...")
         extra = f"\nYou previously leaked these — they are STILL banned: {', '.join(leaks)}"
 
+    # Show anonymous people by their role ("Junior Associate") instead of the
+    # name the model insists on putting in fictional_name ("Clara Simmons").
+    result = label_anonymous_by_role(result)
+
     # Save the list of real names we banned, so later steps (scene_writer.py)
     # can reuse the SAME ban list and never leak a real name into the script.
     result["real_names"] = banned
+
+    # Record this step's real cost for the end-of-pipeline summary.
+    costs.record(result, "analyze",
+                 f"Analyze story + invent characters - OpenAI {MODEL}", total_cost)
 
     return result, total_cost
 

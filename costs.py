@@ -68,6 +68,58 @@ def show(label: str, amount: float):
     print(f"\n COST: {label} = ${amount:.4f}\n")
 
 
+# --- Per-video cost summary -------------------------------------------------
+# Each pipeline step records its real cost into analysis.json (under "costs"),
+# keyed by step so re-running a step OVERWRITES its entry instead of double
+# counting. run.py reads it at the end and prints the breakdown + grand total.
+_SUMMARY_ORDER = ["analyze", "images", "script", "voices", "clips"]
+
+
+def record(data: dict, key: str, label: str, amount: float):
+    """Save one step's real cost into the analysis data, so the whole-video
+    total can be printed when the pipeline finishes."""
+    data.setdefault("costs", {})[key] = {"label": label, "amount": round(amount, 4)}
+
+
+def print_summary(data: dict):
+    """Print a per-video cost breakdown (what each amount paid for) + the total."""
+    costs_map = data.get("costs", {})
+    footer = "(scraping + final assembly are free; ElevenLabs & OpenAI are estimates)"
+
+    # Collect the rows in pipeline order (known steps first, then any extras).
+    rows = []
+    seen = set()
+    for key in _SUMMARY_ORDER + [k for k in costs_map if k not in _SUMMARY_ORDER]:
+        entry = costs_map.get(key)
+        if not entry or key in seen:
+            continue
+        seen.add(key)
+        rows.append((entry["label"], entry["amount"]))
+
+    if not rows:
+        print("\n" + "=" * 72)
+        print("  COST OF THIS VIDEO")
+        print("=" * 72)
+        print("  (no costs were recorded)")
+        print("=" * 72)
+        return
+
+    total = sum(a for _, a in rows)
+    # Pad every label to the longest one so ALL prices start in the same column.
+    label_w = max([len(l) for l, _ in rows] + [len("TOTAL")])
+    box = max(label_w + 14, len(footer) + 2)   # box wide enough for labels + footer
+
+    print("\n" + "=" * box)
+    print("  COST OF THIS VIDEO")
+    print("=" * box)
+    for label, amount in rows:
+        print(f"  {label:<{label_w}}   ${amount:>8.4f}")
+    print("  " + "-" * (box - 2))
+    print(f"  {'TOTAL':<{label_w}}   ${total:>8.4f}")
+    print(f"  {footer}")
+    print("=" * box)
+
+
 def openai_cost(input_tokens: int, output_tokens: int) -> float:
     """Work out the real dollar cost of one OpenAI call from its token usage."""
     return (

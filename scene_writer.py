@@ -225,6 +225,9 @@ if __name__ == "__main__":
 
     script, cost = write_script(data, story_body)
 
+    # Record this step's real cost for the end-of-pipeline summary.
+    costs.record(data, "script", f"Write the scene dialogue - OpenAI {MODEL}", cost)
+
     # Save the script back INTO analysis.json (everything in one place).
     data["script"] = script
     with open(analysis_path, "w") as f:

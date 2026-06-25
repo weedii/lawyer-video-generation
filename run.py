@@ -16,7 +16,10 @@ Usage:
 Each sub-script prints its own result and cost.
 """
 import sys
+import os
+import json
 import subprocess
+import costs
 
 
 def step(number: str, title: str, script_args: list[str]):
@@ -50,3 +53,11 @@ if __name__ == "__main__":
     print("=" * 55, flush=True)
     print("Final video:      output/final_video.mp4", flush=True)
     print("Read everything:  output/analysis.md", flush=True)
+
+    # Print the whole cost of this video: each step recorded its real cost into
+    # analysis.json as it ran; here we total it and show the breakdown.
+    try:
+        with open(os.path.join("output", "analysis.json")) as f:
+            costs.print_summary(json.load(f))
+    except Exception as e:
+        print(f"(could not print cost summary: {e})", flush=True)
