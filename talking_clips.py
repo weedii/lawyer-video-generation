@@ -47,17 +47,24 @@ def slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
 
-def make_talking_clip(image_url: str, audio_url: str, out_path: str) -> float:
+def make_talking_clip(image_url: str, audio_url: str, out_path: str,
+                      prompt: str = "") -> float:
     """Send one image + audio to Kling and save the talking video.
     Returns the video duration in seconds (used for the cost).
+    prompt: Kling's optional text field. It only guides SUBTLE aspects of the
+    animation (no camera moves, no strong emotion), so we feed the line's
+    emotion here hoping for a small expression nudge.
     Retries a few times: fal sometimes throws a transient 'could not download
     the file' (422) error that succeeds on a second try."""
+    args = {"image_url": image_url, "audio_url": audio_url}
+    if prompt:
+        args["prompt"] = prompt   # subtle expression hint only
     last_err = None
     for attempt in range(1, 4):
         try:
             result = fal_client.subscribe(
                 AVATAR_MODEL,
-                arguments={"image_url": image_url, "audio_url": audio_url},
+                arguments=args,
                 with_logs=False,
             )
             url = result["video"]["url"]
@@ -211,7 +218,11 @@ def main():
             uploaded_image[name] = fal_client.upload_file(img_path)
         audio_url = fal_client.upload_file(audio_path)
 
-        seconds = make_talking_clip(uploaded_image[name], audio_url, out_path)
+        # Feed the line's emotion into Kling's prompt for a subtle expression
+        # nudge (Kling only does subtle, so keep it short).
+        emotion = (ln.get("emotion") or "").strip()
+        prompt = f"{emotion} facial expression, subtle natural movement" if emotion else ""
+        seconds = make_talking_clip(uploaded_image[name], audio_url, out_path, prompt)
         ln["clip"] = file_name
         made += 1
         total_seconds += seconds

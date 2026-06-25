@@ -27,6 +27,12 @@ if not KEY:
 
 OUT_DIR = "output"
 
+# ElevenLabs model. eleven_v3 is their most EXPRESSIVE model: it reads emotion
+# "audio tags" like [nervous] or [scoffs] in the text and acts them out, instead
+# of the flat delivery of multilingual_v2. This is what makes the characters
+# sound alive (and, in audio-driven video, look alive). ~$0.10 / 1k characters.
+MODEL_ID = "eleven_v3"
+
 # Ready-made ElevenLabs voices, split by gender. Each character gets one and
 # keeps it for the whole video. If there are more same-gender characters than
 # voices, we cycle through the list.
@@ -83,11 +89,12 @@ def assign_voices(characters: list[dict]) -> dict:
 
 
 def make_voice(text: str, voice_id: str, out_path: str):
-    """Send one line to ElevenLabs and save the mp3."""
+    """Send one line to ElevenLabs (v3) and save the mp3. The text may contain
+    emotion tags like '[nervous]' which v3 acts out rather than reads aloud."""
     resp = requests.post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
         headers={"xi-api-key": KEY, "Content-Type": "application/json"},
-        json={"text": text, "model_id": "eleven_multilingual_v2"},
+        json={"text": text, "model_id": MODEL_ID},
     )
     if resp.status_code != 200:
         sys.exit(f"ElevenLabs error {resp.status_code}: {resp.text}")
@@ -135,13 +142,19 @@ def main():
             print(f"  [{i}] note: '{name}' not in cast, using narrator voice.")
             voice_id = NARRATOR_VOICE
 
+        # Act the line's emotion: prepend it as a v3 audio tag so the voice
+        # delivers it with feeling (e.g. "[smug] It's just banter."). The tag is
+        # interpreted, not spoken. Lines may also carry inline tags already.
+        emotion = (ln.get("emotion") or "").strip()
+        spoken = f"[{emotion}] {ln['line']}" if emotion else ln["line"]
+
         file_name = f"voice_{i:02d}_{slug(name)}.mp3"
         out_path = os.path.join(OUT_DIR, file_name)
-        make_voice(ln["line"], voice_id, out_path)
+        make_voice(spoken, voice_id, out_path)
 
         ln["audio"] = file_name          # remember the audio file for this line
-        total_chars += len(ln["line"])
-        print(f"  [{i}] {name}: saved {file_name}")
+        total_chars += len(spoken)
+        print(f"  [{i}] {name}{f' [{emotion}]' if emotion else ''}: saved {file_name}")
 
     # Save the voice + audio info back into analysis.json (one place for all).
     with open(analysis_path, "w") as f:

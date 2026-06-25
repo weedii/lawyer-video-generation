@@ -64,12 +64,22 @@ HARD RULES:
 - 10 to 14 lines total, including the 2 narration lines.
 - Set the scene in the REAL location where the drama actually happened.
 
+PERFORMANCE (make it emotional, not flat — this is what stops it being boring):
+- Give EVERY line an "emotion": ONE short delivery cue the voice can act, such as
+  nervous, smug, angry, sarcastic, cold, panicked, resigned, amused, tense,
+  defensive, contemptuous. Pick the one that fits the moment.
+- You MAY also drop a short inline cue inside a line for a reaction, written in
+  square brackets, e.g. "[scoffs] You actually believe that?" or
+  "[sigh] I warned you." Use these sparingly, only when they add punch.
+- Give EVERY line a "camera": a short shot direction for the video, such as
+  "slow push-in", "static close-up", "slight handheld", or "quick zoom".
+
 Return ONLY valid JSON with exactly this shape:
 {
   "title": "short episode title",
   "setting": "one line: the real place where this scene happens",
   "lines": [
-    {"type": "narration | dialogue", "character": "Narrator OR exact character name", "line": "what is said", "beat": "intro | setup | escalation | twist | cliffhanger"}
+    {"type": "narration | dialogue", "character": "Narrator OR exact character name", "line": "what is said", "beat": "intro | setup | escalation | twist | cliffhanger", "emotion": "one delivery cue", "camera": "short shot direction"}
   ]
 }
 """
@@ -88,6 +98,11 @@ def clean_lines(script: dict) -> dict:
             "character": ln.get("character", "Narrator"),
             "line": ln["line"],
             "beat": ln.get("beat", ""),
+            # Performance cues: emotion drives the voice (voice_maker.py), camera
+            # is kept for the video step. Default to empty so the rest of the
+            # pipeline always gets these keys.
+            "emotion": ln.get("emotion", ""),
+            "camera": ln.get("camera", ""),
         })
     script["lines"] = cleaned
     return script
@@ -182,11 +197,12 @@ def append_markdown(script: dict, path: str):
              f"*Setting: {script.get('setting', '')}*\n"]
     for ln in script.get("lines", []):
         beat = ln.get("beat", "")
+        emo = f" [{ln['emotion']}]" if ln.get("emotion") else ""   # show the delivery cue
         # Narration lines are voiceover; dialogue lines are spoken by a character.
         if ln.get("type") == "narration":
-            lines.append(f"- _({beat}) Narrator:_ {ln['line']}")
+            lines.append(f"- _({beat}) Narrator:_{emo} {ln['line']}")
         else:
-            lines.append(f"- **{ln['character']}** _({beat})_: {ln['line']}")
+            lines.append(f"- **{ln['character']}** _({beat})_{emo}: {ln['line']}")
     with open(path, "a") as f:
         f.write("\n".join(lines) + "\n")
 
