@@ -96,16 +96,20 @@ def motion_prompt(ln: dict, setting: str) -> str:
     [camera] + [mood] + [what the body does] + [setting]."""
     emotion = (ln.get("emotion") or "").strip()
     camera = (ln.get("camera") or "").strip()
+    action = (ln.get("action") or "").strip()
     parts = []
     if camera:
         parts.append(camera)
     if emotion:
         parts.append(f"{emotion} mood")
-    parts.append(
-        "the character moves and gestures naturally while speaking, with "
-        "expressive body language, shifting posture and hand movements, "
-        "alive and engaged"
-    )
+    if action:
+        # The actor's stage direction: make the character perform this action.
+        parts.append(f"the character {action} while speaking, expressive body language")
+    else:
+        parts.append(
+            "the character moves and gestures naturally while speaking, with "
+            "expressive body language, shifting posture and hand movements"
+        )
     parts.append(f"set in {setting}, cinematic prestige legal drama, photorealistic")
     return ". ".join(parts) + "."
 

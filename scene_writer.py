@@ -40,10 +40,12 @@ based on a REAL legal news story. Make a tight, ORGANIZED scene with a clear arc
 — not just two people arguing.
 
 Speakers:
-- Use ONLY the given characters (their exact names) for dialogue.
-- Some characters are marked "(anonymous)" — these are real but unnamed people
-  in the story (e.g. "Person A", a junior colleague). USE them as normal
-  speakers with their exact label; they are essential to the back-and-forth.
+- Use ONLY the given characters for dialogue. Write each line's "character"
+  field EXACTLY as the name given in the cast — copy the name only, never add
+  extra words like "anonymous".
+- Some characters are marked "anonymous" inside their description — these are
+  real but unnamed people (e.g. a junior colleague). USE them as normal speakers
+  with their exact name (e.g. "Junior Associate"); they matter to the scene.
 - Also use a "Narrator" for short voiceover lines (the hook and the cliffhanger).
 
 STRUCTURE (this is the whole point — give it a beginning, middle and end):
@@ -73,13 +75,20 @@ PERFORMANCE (make it emotional, not flat — this is what stops it being boring)
   "[sigh] I warned you." Use these sparingly, only when they add punch.
 - Give EVERY line a "camera": a short shot direction for the video, such as
   "slow push-in", "static close-up", "slight handheld", or "quick zoom".
+- Give EVERY dialogue line an "action": an actor's stage direction — what the
+  character physically DOES with their body and hands WHILE saying the line.
+  Use upper-body actions and gestures that read on camera, e.g. "leans forward
+  and jabs a finger at the table", "takes off glasses and pinches the bridge of
+  his nose", "slams a folder shut", "crosses arms and looks away", "straightens
+  his tie, jaw tight". Keep it short and doable on camera (do NOT leave frame,
+  no walking away). For narration lines, leave "action" as "".
 
 Return ONLY valid JSON with exactly this shape:
 {
   "title": "short episode title",
   "setting": "one line: the real place where this scene happens",
   "lines": [
-    {"type": "narration | dialogue", "character": "Narrator OR exact character name", "line": "what is said", "beat": "intro | setup | escalation | twist | cliffhanger", "emotion": "one delivery cue", "camera": "short shot direction"}
+    {"type": "narration | dialogue", "character": "Narrator OR exact character name", "line": "what is said", "beat": "intro | setup | escalation | twist | cliffhanger", "emotion": "one delivery cue", "camera": "short shot direction", "action": "what the character physically does while speaking"}
   ]
 }
 """
@@ -98,11 +107,12 @@ def clean_lines(script: dict) -> dict:
             "character": ln.get("character", "Narrator"),
             "line": ln["line"],
             "beat": ln.get("beat", ""),
-            # Performance cues: emotion drives the voice (voice_maker.py), camera
-            # is kept for the video step. Default to empty so the rest of the
-            # pipeline always gets these keys.
+            # Performance cues: emotion drives the voice (voice_maker.py); camera
+            # and action drive the video (talking_clips.py builds the motion
+            # prompt from them). Default to empty so the pipeline always has them.
             "emotion": ln.get("emotion", ""),
             "camera": ln.get("camera", ""),
+            "action": ln.get("action", ""),
         })
     script["lines"] = cleaned
     return script
@@ -124,10 +134,13 @@ def write_script(data: dict, story_body: str) -> tuple[dict, float]:
     client = OpenAI(api_key=KEY, timeout=45.0, max_retries=3)
 
     # Build the cast list the writer must use (name, role, gender, personality).
-    # Mark anonymous people so the writer knows they are real speakers to include.
+    # IMPORTANT: keep the NAME clean. We mark anonymity INSIDE the parentheses,
+    # never glued to the name — otherwise the writer copies "(anonymous)" into the
+    # speaker name and it stops matching the character everywhere downstream.
     cast = "\n".join(
-        f"- {c['fictional_name']}{' (anonymous)' if c.get('anonymous') else ''} "
-        f"({c['role']}, {c.get('gender', '')}): {c.get('personality', '')}"
+        f"- {c['fictional_name']} "
+        f"({c['role']}{', anonymous' if c.get('anonymous') else ''}, "
+        f"{c.get('gender', '')}): {c.get('personality', '')}"
         for c in data.get("characters", [])
     )
 
