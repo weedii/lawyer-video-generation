@@ -1,18 +1,19 @@
 """STAGE 2 - STEP 5: Assemble the final microdrama video.
 
-It trims each clip to its audio length (the talking model pads short clips),
-then joins them with clean, professional cuts and (optionally) background music.
-No captions.
+It joins the clips, in script order, into one vertical video and (optionally)
+adds background music. No captions.
 
-Editing approach (researched best practice for short-form dialogue):
-  - HARD CUTS between lines. For talking dialogue this looks far more
-    professional than crossfades/dissolves, which feel slow and amateur.
-  - The polish is in the details, NOT camera movement (a moving frame looked
-    like a shaky handheld, so the camera never moves):
-      * a tiny audio fade at every clip edge, which removes the click/pop you
-        otherwise hear at each hard cut;
-      * a fade-from-black at the very start and fade-to-black at the very end,
-        so the video opens and closes cleanly instead of snapping on/off.
+Quality first: the clips can be high resolution (e.g. OmniHuman is 1088x1920).
+So we DON'T downscale them — we find the biggest clip size and render the whole
+video at that size and frame rate, re-encoding at near-lossless quality.
+
+Motion: a gentle zoom that alternates in/out per clip so the video breathes.
+It is done on a 2x-SUPERSAMPLED frame at the clips' native size, so it stays
+smooth (no jitter) AND sharp (no quality loss).
+
+Clean joins (all FREE, ffmpeg):
+  - a tiny audio fade at every clip edge, to remove the click/pop at a hard cut;
+  - a fade-from-black at the start and fade-to-black at the end.
 
 Usage:
     python assemble.py
@@ -31,19 +32,13 @@ OUT_DIR = "output"
 FINAL = os.path.join(OUT_DIR, "final_video.mp4")
 MUSIC = os.path.join(OUT_DIR, "music.mp3")
 
-# How long the opening fade-in and closing fade-out (from/to black) last.
-OPEN_FADE = 0.3
-CLOSE_FADE = 0.4
-# Tiny fade on every clip edge to kill the pop/click at a hard cut (40 ms).
-EDGE_FADE = 0.04
-
-# Gentle zoom. Clips alternate slow zoom-IN / zoom-OUT so the video "breathes"
-# instead of sitting still — but only a little (6%) and very slowly.
-# KEY for smoothness: we first upscale to 2x (supersample), then zoom. The old
-# shaky feel came from zoompan rounding to whole pixels each frame; zooming on a
-# 2x-bigger image makes that rounding half a pixel, so the move is smooth.
-ZOOM_AMOUNT = 0.06          # 6% total zoom over the whole clip
-SUPER_W, SUPER_H = 1440, 2560   # 2x of 720x1280, for jitter-free zoom
+OPEN_FADE = 0.3      # fade-in from black at the very start
+CLOSE_FADE = 0.4     # fade-out to black at the very end
+EDGE_FADE = 0.04     # tiny audio fade at each cut, to kill the pop/click
+CRF = 16             # x264 quality: 16 is visually near-lossless (lower = better)
+FPS = 25             # match the talking-model output (OmniHuman/Kling are 25fps)
+ZOOM_AMOUNT = 0.06   # gentle 6% zoom over a clip; alternates in/out per clip
+SUPER_SCALE = 2      # render the zoom on a 2x frame so it stays smooth + sharp
 
 
 def run(cmd: list[str]):
@@ -59,46 +54,48 @@ def audio_duration(path: str) -> float:
         check=True, capture_output=True, text=True).stdout.strip())
 
 
-def normalise(in_path: str, out_path: str, dur: float, zoom_in: bool = True,
-              is_first: bool = False, is_last: bool = False):
-    """Re-encode one clip to a common format and apply the clean-cut polish.
+def video_dims(path: str) -> tuple[int, int]:
+    """Return (width, height) of a video."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path],
+        check=True, capture_output=True, text=True).stdout.strip()
+    w, h = out.split("x")
+    return int(w), int(h)
 
-    dur: cut the clip to exactly this length (its audio length). The talking
-    model (Kling) pads short clips to a fixed ~7.2s block, so we trim the dead
-    tail here so each clip matches its speech.
 
-    Video: fit to a vertical frame and apply a slow, smooth zoom (in or out, see
-    zoom_in) so the shot gently breathes. The very first clip fades in from
-    black; the very last fades out to black.
-
-    Audio: a tiny fade in/out on EVERY clip removes the click/pop heard at a
-    hard cut. -ac 2 forces stereo on every clip (narrator clips are mono,
-    dialogue clips stereo; mixing layouts loses audio on some segments)."""
-    # Linear zoom across the whole clip, expressed per output frame so the
-    # endpoints are exact and the motion is perfectly even (no easing wobble).
-    frames = max(int(round(dur * 30)) - 1, 1)
+def normalise(in_path: str, out_path: str, dur: float, w: int, h: int,
+              zoom_in: bool = True, is_first: bool = False, is_last: bool = False):
+    """Re-encode one clip to the common size/fps/quality so the clips join
+    cleanly WITHOUT losing quality, applying a gentle smooth zoom.
+    - High quality (crf 16) so re-encoding barely touches the picture.
+    - The zoom is rendered on a 2x frame (supersampled) so it is smooth and
+      stays sharp, then output at the native WxH.
+    - -ac 2 forces stereo on every clip (narrator clips are mono, dialogue
+      stereo; mixing layouts loses audio on some segments).
+    dur: cut to this length (only used when a clip is much longer than its
+    speech, i.e. the Kling padding case)."""
+    # Linear zoom across the clip (exact endpoints, even motion). zoom_in grows
+    # 1.00 -> 1.06; otherwise it shrinks 1.06 -> 1.00. Alternating per clip makes
+    # the video gently breathe in and out.
+    frames = max(int(round(dur * FPS)) - 1, 1)
     if zoom_in:
-        zexpr = f"1.0+{ZOOM_AMOUNT}*on/{frames}"                  # 1.00 -> 1.06
+        zexpr = f"1.0+{ZOOM_AMOUNT}*on/{frames}"
     else:
-        zexpr = f"{1.0 + ZOOM_AMOUNT}-{ZOOM_AMOUNT}*on/{frames}"  # 1.06 -> 1.00
+        zexpr = f"{1.0 + ZOOM_AMOUNT}-{ZOOM_AMOUNT}*on/{frames}"
+    sw, sh = w * SUPER_SCALE, h * SUPER_SCALE
 
-    # --- video filter ---
-    # Upscale to 2x first (supersample), then zoom on that big image and output
-    # back at 720x1280 — this is what keeps the slow zoom smooth, not jittery.
+    # Upscale 2x (supersample), zoom on that big frame, output at native WxH.
     vf = (
-        f"scale={SUPER_W}:{SUPER_H}:force_original_aspect_ratio=increase,"
-        f"crop={SUPER_W}:{SUPER_H},"
+        f"scale={sw}:{sh}:force_original_aspect_ratio=increase,crop={sw}:{sh},"
         f"zoompan=z='{zexpr}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-        f"fps=30:s=720x1280"
+        f"fps={FPS}:s={w}x{h}"
     )
     if is_first:
-        vf += f",fade=t=in:st=0:d={OPEN_FADE}"            # open from black
+        vf += f",fade=t=in:st=0:d={OPEN_FADE}"
     if is_last:
-        vf += f",fade=t=out:st={max(dur - CLOSE_FADE, 0):.3f}:d={CLOSE_FADE}"  # close to black
+        vf += f",fade=t=out:st={max(dur - CLOSE_FADE, 0):.3f}:d={CLOSE_FADE}"
 
-    # --- audio filter ---
-    # Bigger fade at the very start/end (matches the black open/close); a tiny
-    # one everywhere else so no cut ever pops.
     a_in = OPEN_FADE if is_first else EDGE_FADE
     a_out = CLOSE_FADE if is_last else EDGE_FADE
     af = (f"afade=t=in:st=0:d={a_in},"
@@ -106,10 +103,12 @@ def normalise(in_path: str, out_path: str, dur: float, zoom_in: bool = True,
 
     run([
         "ffmpeg", "-y", "-i", in_path,
-        "-t", f"{dur:.3f}",                 # trim the padded tail to the audio length
+        "-t", f"{dur:.3f}",
         "-vf", vf, "-af", af,
-        "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-ar", "44100", "-ac", "2",
+        "-r", str(FPS),
+        "-c:v", "libx264", "-crf", str(CRF), "-preset", "medium",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
         out_path,
     ])
 
@@ -127,25 +126,29 @@ def main():
     if not clips:
         sys.exit("No talking clips found. Run talking_clips.py first.")
 
-    print(f"Assembling {len(clips)} clips ...")
+    # Pick the target size = the BIGGEST clip, so we never downscale good clips.
+    paths = [os.path.join(OUT_DIR, ln["clip"]) for ln in clips]
+    dims = [video_dims(p) for p in paths]
+    target_w, target_h = max(dims, key=lambda wh: wh[0] * wh[1])
+    print(f"Assembling {len(clips)} clips at {target_w}x{target_h} ...")
 
-    # 1) Normalise each clip: trim to its audio length, stable framing, and the
-    #    clean-cut polish (edge audio fades + black open/close on the ends).
+    # 1) Normalise each clip to the common size/fps/quality (no zoom, no downscale).
     normalised = []
     for i, ln in enumerate(clips, 1):
         in_path = os.path.join(OUT_DIR, ln["clip"])
         out_path = os.path.join(OUT_DIR, f"_norm_{i:02d}.mp4")
 
-        # Length = this line's audio length (falls back to the clip's own length).
-        if ln.get("audio"):
-            dur = audio_duration(os.path.join(OUT_DIR, ln["audio"]))
-        else:
-            dur = audio_duration(in_path)
+        # Only trim when a clip is MUCH longer than its speech (Kling pads with
+        # ~3s of dead air). OmniHuman already matches the audio, so trimming to
+        # the mp3 length would chop a few ms off the real ending -> bad cut.
+        clip_dur = audio_duration(in_path)
+        audio_dur = (audio_duration(os.path.join(OUT_DIR, ln["audio"]))
+                     if ln.get("audio") else clip_dur)
+        dur = audio_dur if (clip_dur - audio_dur) > 0.5 else clip_dur
 
-        # Alternate the zoom direction per clip so the video gently breathes
-        # in and out instead of always pushing the same way.
+        # Alternate the zoom direction so the video breathes in and out.
         zoom_in = (i % 2 == 1)
-        normalise(in_path, out_path, dur, zoom_in=zoom_in,
+        normalise(in_path, out_path, dur, target_w, target_h, zoom_in=zoom_in,
                   is_first=(i == 1), is_last=(i == len(clips)))
         normalised.append(out_path)
         print(f"  [{i}] prepared {ln['clip']} -> {dur:.2f}s ({'zoom in' if zoom_in else 'zoom out'})")
