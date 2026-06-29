@@ -22,10 +22,10 @@ Grow one or several accounts, then **sell ads to legal tech companies**.
 - **Characters:** invented from scratch, must stay consistent across videos.
 
 ## The tools (API keys in `.env`)
-- **fal.ai** — images + talking video. Models in use: **Nano Banana Pro** (character images), **FLUX dev** (establishing shots), **Kling AI Avatar v2** (talking clips).
-- **ElevenLabs** — voices.
+- **fal.ai** — images + video. Models in use: **Nano Banana Pro** (character images + two-character scene image), **FLUX dev** (anonymous silhouettes + establishing-shot fallback), **VEED Fabric 1.0** (talking lip-sync clips), **Seedance 1.5 Pro** (narration motion scenes). Kling AI Avatar v2 + OmniHuman 1.5 are kept in `talking_clips.py` as switchable talking models.
+- **ElevenLabs** (v3) — voices.
 - **OpenAI gpt-4o-mini** — story analysis + scene script (cheap text model).
-- Avoid: Runway (too expensive). Note: the boss disliked Kling for general video-gen, but we use Kling's separate **talking-avatar** product for lip-synced clips.
+- Avoid: Runway (too expensive). The boss disliked Kling for general video-gen; the talking lip-sync is now **VEED Fabric** (better sync, no padding).
 
 ---
 
@@ -42,10 +42,10 @@ One command does everything: `python run.py "<story-url>"` → `output/final_vid
 | 3. Character images (cinematic) | `gen_characters.py` | Nano Banana Pro (2K) | `char_*.png` | $0.15 each |
 | 4. Scene script | `scene_writer.py` | OpenAI gpt-4o-mini | adds `script` to analysis.json | ~$0.001 |
 | 5. Voices | `voice_maker.py` | ElevenLabs | `voice_*.mp3` | by characters |
-| 6. Talking clips | `talking_clips.py` | Kling AI Avatar v2 (dialogue) + FLUX dev (narrator establishing shot) | `clip_*.mp4` | $0.056/sec |
+| 6. Talking clips | `talking_clips.py` | COMBO: Seedance 1.5 Pro (body acting) + Sync lipsync (our voice) per dialogue line; Seedance (narration motion) + Nano Banana Pro (scene image) | `clip_*.mp4` | ~$0.038/sec dialogue |
 | 7. Assemble | `assemble.py` | ffmpeg (local) — trims each clip to its audio length, then joins | `final_video.mp4` | free |
 
-- Script has a **narrator hook** (intro) + **cliffhanger** (outro); narrator lines render as establishing shots, character lines as talking clips.
+- Script has a **narrator hook** (intro) + **cliffhanger** (outro); narrator beats render as **moving two-character scenes** (Seedance), character lines as talking lip-sync clips.
 - Everything ends up in `output/analysis.json` (story, characters, script, files).
 - Names are auto-fictionalized and checked (see analyze.py: find names → ban → verify).
 - ~$3.50 per finished video. Optional `output/music.mp3` adds background music. No captions.
@@ -59,12 +59,19 @@ One command does everything: `python run.py "<story-url>"` → `output/final_vid
 - Microdramas are mostly **talking close-ups + music** — that is the right format, not a limitation. (We use NO captions.)
 - A talking video needs the **audio first** (the mouth copies the sound).
 - One **locked image per character**, reused every time = consistency.
-- Talking-avatar models (Kling, and Kling pro) **pad short clips to a fixed ~7.2s block** longer than the audio; no parameter stops it. Fix: `assemble.py` trims every clip to its audio length. OmniHuman 1.5 matched length in tests but costs ~3×.
-- Nano Banana Pro can drift to **landscape** if the prompt has widescreen cues ("film still"); force "tall vertical 9:16 portrait". Don't name real shows in the prompt or it writes them on background TVs.
+- **Hybrid is the key trick:** lip-sync models (VEED/Kling/OmniHuman) only do close-up talking with gentle motion — they CANNOT do big actions (stand up, two people in one frame). The big motion comes from a separate **scene model (Seedance 1.5 Pro)** on the narration beats. No single model does both lip-sync-our-voice AND big motion.
+- **Seedance / Veo / Kling i2v cannot lip-sync our ElevenLabs voice** — they have no input-audio field (they're silent or invent their own voice). Only avatar models (VEED, Kling Avatar, OmniHuman) lip-sync our audio.
+- VEED Fabric matches the voice length (no padding). Kling pads to a fixed ~7.2s block; `assemble.py` still trims as a safety net.
+- **ElevenLabs v3 clips the final word** (e.g. "anyone" → "anyo") even with a period. Fix in `voice_maker.py`: append a trailing `—` so the cut lands on the dash, then trim the leftover silence.
+- Nano Banana Pro can drift to **landscape** on wide settings ("crowded courtroom") or widescreen cues ("film still"); force "tall vertical 9:16 portrait".
+- **Sideways/rotated scenes:** asking for a WIDE/horizontal layout (two people across a desk in a room) makes Nano Banana compose wide and **rotate it 90°** to fit 9:16 — people end up lying sideways. The pixel size stays portrait, so a width/height check can't catch it. **Fix that keeps the full room:** compose the room **vertically using depth + height** — foreground people, the room rising up BEHIND and ABOVE them — so the natural composition is tall, not wide. You still get the whole environment, just stacked top-to-bottom, and it stays upright. (Do NOT "fix" it by cropping to a tight portrait — that throws away the room.) See `make_scene_image` in `talking_clips.py`.
+- Don't name real shows in the prompt or it writes them on background TVs.
 
 ## Current status
-- Full pipeline automated: `run.py` takes a link → final vertical video (~$3.50). Proven end to end.
-- Talking model: Kling AI Avatar v2 standard ($0.056/sec). Known tradeoff: it pads short clips a bit longer than their audio. OmniHuman 1.5 fixes that but costs ~3× more — kept Kling for cost now that Nano Banana images improved quality.
+- Full pipeline automated: `run.py` takes a link → final vertical video (~$2.50–3.00). Proven end to end.
+- Dialogue clips use the **COMBO** (`TALKING_MODEL = "seedance_sync"`): **Seedance** animates the photo so the character acts with their body (stands up, leans in, gestures from the line's `action` cue), then **Sync** (`fal-ai/sync-lipsync`) lip-syncs our ElevenLabs voice onto that moving video. Real acting + correct lips on one clip, ~$0.038/sec — and cheaper than VEED alone. For lip-sync to work the Seedance prompt keeps the face toward camera.
+- Switchable single-model talkers still in `talking_clips.py`: `"veed"` (VEED Fabric, lip-sync only), `"kling"`, `"omnihuman"`.
+- Narration beats use **Seedance 1.5 Pro** motion scenes (two lawyers, one stands up) instead of a frozen establishing photo.
 
 ## Next steps (in order)
 1. Judge quality on a few videos; improve weak spots (script tone, voice fit, lip-sync).

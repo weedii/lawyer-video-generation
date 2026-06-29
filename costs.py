@@ -12,10 +12,14 @@ Sources (fal.ai official model pages + docs, checked 2026-06):
     fal.ai/models/fal-ai/sana
 - fast-sdxl:        $0.00111 / compute-second (so price varies with run time)
     gist.github.com/azer/6e8ffa228cb5d6f5807cd4d895b191a4
-- Kling AI Avatar v2 standard: $0.0562 / second of OUTPUT video
+- VEED Fabric 1.0 (DEFAULT talker): $0.08/sec (480p), $0.15/sec (720p). No padding.
+    fal.ai/models/veed/fabric-1.0
+- Kling AI Avatar v2 standard: $0.0562 / second of OUTPUT video (pads to ~7.2s)
     fal.ai/models/fal-ai/kling-video/ai-avatar/v2/standard
 - OmniHuman 1.5:    $0.16 / second of output video
     fal.ai/models/fal-ai/bytedance/omnihuman/v1.5
+- Seedance 1.5 Pro (narration motion): $0.052/sec with audio, $0.026/sec without
+    fal.ai/models/fal-ai/bytedance/seedance/v1.5/pro/image-to-video
 - ElevenLabs and OpenAI bill on SEPARATE accounts (NOT fal).
 """
 
@@ -39,11 +43,13 @@ SANA_PER_IMAGE = 0.001            # $0.001 / MP
 FAST_SDXL_PER_IMAGE = 0.0023      # ~$0.00111/compute-sec x ~2s; COMPUTE-billed, varies
 
 # --- Talking-video models (fal) -------------------------------------------
-# IMPORTANT (biggest cost in the whole pipeline): these bill on the OUTPUT video
-# length, and Kling PADS every clip to a fixed ~7.2s block (longer than the
-# speech). So a clip costs ~7.2s x $0.0562 = ~$0.40 EACH, no matter how short
-# the line is. Narrator + anonymous lines are FREE (static image + voice via
-# ffmpeg), so the way to spend less is FEWER Kling talking clips.
+# These bill on the OUTPUT video length. We now use VEED Fabric (below) as the
+# default talker; Kling and OmniHuman are kept as switchable options.
+# NOTE on Kling: it PADS every clip to a fixed ~7.2s block (longer than the
+# speech), so a Kling clip costs ~7.2s x $0.0562 = ~$0.40 EACH no matter how
+# short the line is. VEED Fabric does NOT pad (length matches the voice), which
+# is the main reason we switched. Anonymous lines stay free (static silhouette +
+# voice via ffmpeg); narration beats now cost a little (Seedance motion, below).
 KLING_AVATAR_PER_SEC = 0.0562
 KLING_PADDED_CLIP_SECONDS = 7.2                                   # fixed block Kling outputs
 KLING_COST_PER_CLIP_EST = KLING_AVATAR_PER_SEC * KLING_PADDED_CLIP_SECONDS  # ~$0.40
@@ -53,6 +59,31 @@ KLING_COST_PER_CLIP_EST = KLING_AVATAR_PER_SEC * KLING_PADDED_CLIP_SECONDS  # ~$
 # on OmniHuman, longer lines are cheaper on Kling. Most lines are >2.5s, so Kling
 # usually wins — which is why we keep Kling.
 OMNIHUMAN_PER_SEC = 0.16
+
+# VEED Fabric 1.0 (our talking lip-sync model): animates a still photo to our
+# voice. Unlike Kling it does NOT pad — the clip length matches the voice, so we
+# only pay for real seconds. 480p is the cheap tier we use; 720p is HD.
+#     fal.ai/models/veed/fabric-1.0
+VEED_FABRIC_480P_PER_SEC = 0.08
+VEED_FABRIC_720P_PER_SEC = 0.15
+
+# --- Scene-motion model (fal) ---------------------------------------------
+# Seedance 1.5 Pro image-to-video: real body motion (two people, stand up, walk)
+# from a still image. We use it for the NARRATION beats so they MOVE instead of
+# being a frozen photo. We turn its native audio OFF (we lay the narrator voice
+# over it ourselves), which HALVES the price.
+#   720p WITH audio  = $0.052/sec
+#   720p WITHOUT audio = $0.026/sec  <- what we use
+#     fal.ai/models/fal-ai/bytedance/seedance/v1.5/pro/image-to-video
+SEEDANCE_PRO_PER_SEC = 0.026
+
+# Sync lipsync (fal-ai/sync-lipsync): takes a VIDEO + our voice and redoes the
+# MOUTH to match. We run it AFTER Seedance so a moving clip (character stands up,
+# gestures) also lip-syncs our ElevenLabs voice. This is the "two models on one
+# clip" combo: Seedance acts the body, Sync fixes the lips.
+#   $0.70 / minute  =  $0.0117 / second of output video.
+#     fal.ai/models/fal-ai/sync-lipsync
+SYNC_LIPSYNC_PER_SEC = 0.0117
 
 # --- Text + voice (SEPARATE accounts, not fal) ----------------------------
 # ElevenLabs bills by characters from your plan quota, not per-call dollars.

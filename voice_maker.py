@@ -15,6 +15,7 @@ import os
 import sys
 import json
 import re
+import subprocess
 import requests
 from dotenv import load_dotenv
 import costs
@@ -88,18 +89,45 @@ def assign_voices(characters: list[dict]) -> dict:
     return mapping
 
 
+def trim_trailing_silence(path: str):
+    """Cut silence off the END of an mp3 (ffmpeg), keeping a tiny 0.1s tail.
+    We add a trailing pause to the text (see make_voice) to stop v3 clipping the
+    last word; this removes the dead air that pause leaves, without touching the
+    speech. Conservative -50dB threshold so a soft word ending is never cut."""
+    tmp = path + ".trim.mp3"
+    r = subprocess.run([
+        "ffmpeg", "-y", "-i", path, "-af",
+        "areverse,silenceremove=start_periods=1:start_threshold=-50dB:"
+        "start_silence=0.1,areverse",
+        tmp,
+    ], capture_output=True)
+    if r.returncode == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 0:
+        os.replace(tmp, path)
+    elif os.path.exists(tmp):
+        os.remove(tmp)   # trim failed — keep the original untouched
+
+
 def make_voice(text: str, voice_id: str, out_path: str):
     """Send one line to ElevenLabs (v3) and save the mp3. The text may contain
-    emotion tags like '[nervous]' which v3 acts out rather than reads aloud."""
+    emotion tags like '[nervous]' which v3 acts out rather than reads aloud.
+
+    v3 has a habit of CLIPPING the final word (e.g. 'anyone' -> 'anyo'), even
+    when the line ends with a period. Fix: append a trailing ' —' so the real
+    last word is no longer at the cut boundary (verified: it restores the word).
+    We then trim the extra trailing pause so no dead air is added."""
+    buffered = text.rstrip()
+    if buffered and buffered[-1] not in "—-…":
+        buffered += " —"
     resp = requests.post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
         headers={"xi-api-key": KEY, "Content-Type": "application/json"},
-        json={"text": text, "model_id": MODEL_ID},
+        json={"text": buffered, "model_id": MODEL_ID},
     )
     if resp.status_code != 200:
         sys.exit(f"ElevenLabs error {resp.status_code}: {resp.text}")
     with open(out_path, "wb") as f:
         f.write(resp.content)
+    trim_trailing_silence(out_path)
 
 
 def main():
