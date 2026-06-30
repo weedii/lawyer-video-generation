@@ -453,7 +453,10 @@ def make_seedance_clip(image_path: str, prompt: str, seconds: float,
     lean in, gesture) and a camera move. Audio OFF (we add the narrator voice
     after) to halve the cost. Returns the clip duration billed. Retries on
     transient fal errors so the run doesn't die on a hiccup."""
-    dur = int(max(SEEDANCE_MIN_SEC, min(SEEDANCE_MAX_SEC, round(seconds))))
+    # Make the motion a bit LONGER than the voice (round UP + 1s) so the video is
+    # never shorter than the narration — otherwise overlay_voice's -shortest would
+    # cut the voice's last word when the clip ends early.
+    dur = int(max(SEEDANCE_MIN_SEC, min(SEEDANCE_MAX_SEC, round(seconds + 1))))
     image_uri = fal_client.upload_file(image_path)
     last_err = None
     for attempt in range(1, 4):
@@ -484,16 +487,19 @@ def make_seedance_clip(image_path: str, prompt: str, seconds: float,
 
 def overlay_voice(video_path: str, audio_path: str, out_path: str):
     """Put the narrator voice onto the silent Seedance motion clip (ffmpeg, free).
-    Keeps the video as-is and stops at whichever ends first, so the voiceover is
-    fully heard over the motion."""
+    The Seedance video is generated slightly LONGER than the voice (see
+    make_seedance_clip), so here we simply cut the REAL video down to the voice's
+    exact length: -map the video + the voice, then -shortest stops at the voice
+    (the shorter stream). Result: video length == audio length exactly, real
+    frames, no padding/freeze, and the full last word is heard."""
     subprocess.run([
         "ffmpeg", "-y",
-        "-i", video_path,                  # silent Seedance motion
+        "-i", video_path,                  # silent Seedance motion (longer than voice)
         "-i", audio_path,                  # narrator voice
-        "-c:v", "copy",                    # don't re-encode the video
+        "-c:v", "copy",                    # keep the real video frames as-is
         "-c:a", "aac", "-ar", "44100",
         "-map", "0:v:0", "-map", "1:a:0",  # video from clip, audio from voice
-        "-shortest",
+        "-shortest",                        # cut the video to the voice's exact length
         out_path,
     ], check=True, capture_output=True)
 
