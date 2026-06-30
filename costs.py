@@ -54,10 +54,10 @@ KLING_AVATAR_PER_SEC = 0.0562
 KLING_PADDED_CLIP_SECONDS = 7.2                                   # fixed block Kling outputs
 KLING_COST_PER_CLIP_EST = KLING_AVATAR_PER_SEC * KLING_PADDED_CLIP_SECONDS  # ~$0.40
 
-# OmniHuman 1.5 (alternative, not wired): $0.16/sec but length MATCHES the audio
-# (no padding). Break-even vs Kling is ~2.5s of audio: shorter lines are cheaper
-# on OmniHuman, longer lines are cheaper on Kling. Most lines are >2.5s, so Kling
-# usually wins — which is why we keep Kling.
+# OmniHuman 1.5 — the CURRENT dialogue model ($0.16/sec). One model that does
+# body acting AND lip-syncs our voice; clip length matches the audio (no padding).
+# It's the biggest cost in the pipeline (~$5 of a ~$6 video) but gives the best
+# single-model acting + lip-sync without a second model glitching the face.
 OMNIHUMAN_PER_SEC = 0.16
 
 # VEED Fabric 1.0 (our talking lip-sync model): animates a still photo to our

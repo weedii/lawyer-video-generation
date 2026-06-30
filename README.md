@@ -31,7 +31,7 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 | 3 | `gen_characters.py` | One cinematic vertical image per character | fal.ai Nano Banana Pro (2K) | $0.15 each |
 | 4 | `scene_writer.py` | Write the scene script (who says what) | OpenAI gpt-4o-mini | ~$0.001 |
 | 5 | `voice_maker.py` | One voice line per script line (narrator + characters) | ElevenLabs | by characters |
-| 6 | `talking_clips.py` | Each dialogue line: character ACTS (body motion) + lip-syncs our voice; narrator beats become a moving two-character scene | Seedance 1.5 Pro + Sync lipsync (dialogue combo) + Seedance (narration) + Nano Banana Pro (scene image) | ~$0.038/sec dialogue |
+| 6 | `talking_clips.py` | Each dialogue line: character ACTS (body motion) + lip-syncs our voice in one model; narrator beats become a moving two-character scene | OmniHuman 1.5 (dialogue) + Seedance 1.5 Pro (narration) + Nano Banana Pro (scene image) | $0.16/sec dialogue |
 | 7 | `assemble.py` | Trim each clip to its audio, then join into the final video | ffmpeg (local) | free |
 
 ### Results (in `output/`)
@@ -88,11 +88,11 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
   (Seedance) used on the narration beats — that is the hybrid.
 - A talking video needs the **audio first** (the mouth copies the sound).
 - One **locked image per character**, reused every time = consistency.
-- Dialogue clips use a **two-model combo**: **Seedance** animates the photo so
-  the character acts with their body (stands up, leans in, gestures), then
-  **Sync** lip-syncs our voice onto that moving video — real acting + correct
-  lips on one clip, ~$0.038/sec (cheaper than VEED alone). VEED Fabric, Kling and
-  OmniHuman remain switchable single-model options in `talking_clips.py`.
+- Dialogue clips use **OmniHuman 1.5**: one model that does real body acting AND
+  lip-syncs our ElevenLabs voice, driven by the line's action/emotion/camera
+  cues ($0.16/sec). One model means no second model glitching the face (the
+  weakness of the older Seedance+Sync combo). The combo, VEED Fabric and Kling
+  remain switchable options in `talking_clips.py` (`TALKING_MODEL`).
 - **ElevenLabs v3 clips the final word** — fix: append a trailing `—` so the cut
   lands on the dash, then trim the leftover silence (`voice_maker.py`).
 - Image models (Nano Banana Pro) can drift to landscape, so prompts force a tall
@@ -104,10 +104,10 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 - Character image (Nano Banana Pro, 2K): $0.15 each
 - Anonymous silhouette (FLUX dev): $0.025 each
 - Voice (ElevenLabs v3): billed by characters
-- Dialogue clip (Seedance motion $0.026/s + Sync lipsync $0.012/s): ~$0.038 per second
+- Dialogue clip (OmniHuman 1.5): $0.16 per second of video
 - Narration motion (Seedance 1.5 Pro, no audio): $0.026 per second
 - Two-character scene image (Nano Banana Pro): $0.15 once per video
-- **Roughly $2.50–3.00 for one finished video**
+- **Roughly $6 for one finished video** (the dialogue clips are the bulk)
 
 ---
 

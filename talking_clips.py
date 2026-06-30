@@ -1,10 +1,10 @@
 """STAGE 2 - STEP 3: Make a video clip for every line.
 
 For each DIALOGUE line by a NAMED character: make the character ACT and talk on
-one clip with the COMBO — Seedance animates their photo so they move with their
-body (stand up, lean in, gesture), then Sync lip-syncs OUR voice onto that moving
-video. The line's action/emotion/camera cues drive the motion. Switch
-TALKING_MODEL to "veed" / "kling" / "omnihuman" for the single-model engines.
+one clip with OmniHuman 1.5 — one model that animates the photo with real body
+acting AND lip-syncs OUR ElevenLabs voice. The line's action/emotion/camera cues
+become its motion prompt. Switch TALKING_MODEL to "seedance_sync" (Seedance+Sync
+combo), "veed", or "kling" for the other engines.
 
 For each NARRATION line (the intro hook + the cliffhanger): there is no talking
 face, so instead we animate a SCENE with real motion — two lawyers in the same
@@ -22,9 +22,9 @@ Usage:
 Reads:  output/analysis.json   (characters with images + script lines with audio)
 Output: output/clip_01_<name>.mp4, ...   (one per line, in order)
         It also writes each clip's file name back INTO analysis.json.
-Cost:   $0.08 per second of VEED Fabric 480p video, plus the Seedance motion
-        beats and a $0.15 two-character scene image (only if the script has
-        narration).
+Cost:   $0.16 per second of OmniHuman 1.5 dialogue video, plus the Seedance
+        narration motion beats and a $0.15 two-character scene image (only if the
+        script has narration).
 """
 import os
 import sys
@@ -52,15 +52,17 @@ if not os.getenv("FAL_KEY"):
 #                        lip-sync models can't do it.
 #
 # Which model makes the NAMED talking characters:
-#   "seedance_sync" -> THE COMBO (default): Seedance animates the photo so the
-#                  character ACTS with their body (stands up, leans in, gestures),
-#                  then Sync lip-syncs OUR voice onto that moving video. Real
-#                  acting + correct lips on the same clip (~$0.038/sec total).
-#   "veed"      -> VEED Fabric 1.0: lip-sync only, gentle motion, no acting
-#                  ($0.08/sec). Kept as a cheaper-to-run fallback.
+#   "omnihuman" -> OmniHuman 1.5 (default): ONE model that does both body acting
+#                  AND lip-sync to OUR ElevenLabs voice. Reads the line's
+#                  action/emotion/camera as its motion prompt. Cleaner, faster
+#                  acting than the two-model combo (no second model glitching the
+#                  face), and matches the voice length. ~$0.16/sec.
+#   "seedance_sync" -> THE COMBO: Seedance body motion + Sync lip-sync our voice
+#                  (~$0.038/sec). Cheapest, but acting is slow and the face can
+#                  glitch where the two models meet. Kept as a budget fallback.
+#   "veed"      -> VEED Fabric 1.0: lip-sync only, gentle motion, no acting ($0.08/sec).
 #   "kling"     -> Kling AI Avatar v2 std: weakest lip-sync, pads clips. Fallback.
-#   "omnihuman" -> OmniHuman 1.5: acting + lip-sync in one model, ~$0.16/sec.
-TALKING_MODEL = "seedance_sync"
+TALKING_MODEL = "omnihuman"
 
 OMNIHUMAN_MODEL = "fal-ai/bytedance/omnihuman/v1.5"          # moving, acting talker
 AVATAR_MODEL = "fal-ai/kling-video/ai-avatar/v2/standard"   # cheap lip-sync talker
@@ -232,6 +234,8 @@ def motion_prompt(ln: dict, setting: str) -> str:
             "the character moves and gestures naturally while speaking, with "
             "expressive body language, shifting posture and hand movements"
         )
+    # Keep the face toward camera so OmniHuman's audio-driven lip-sync stays sharp.
+    parts.append("facing the camera with face and mouth clearly visible")
     parts.append(f"set in {setting}, cinematic prestige legal drama, photorealistic")
     return ". ".join(parts) + "."
 
