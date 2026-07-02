@@ -14,8 +14,9 @@ shows like *Suits*, *Billions*, and *The Good Wife*.
 ## What it does: Link → Final video
 
 Give it a story link and it automatically produces a finished vertical
-microdrama: a **narrator hook**, the characters acting out the scene, and a
-**cliffhanger** ending. Cost: **about $3.50 per video.**
+microdrama as a **short film**: a **narrator hook**, then **cinematic scenes
+where the characters act and talk TO EACH OTHER in the same room**, and a
+**cliffhanger** ending. Cost: **about $12–15 per video.**
 
 ### Run it
 ```bash
@@ -28,11 +29,11 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 |------|--------|--------------|-------|------|
 | 1 | `scrape.py <url>` | Download story + comments | — | free |
 | 2 | `analyze.py` | Organize + invent fictional characters | OpenAI gpt-4o-mini | ~$0.001 |
-| 3 | `gen_characters.py` | One cinematic vertical image per character | fal.ai Nano Banana Pro (2K) | $0.15 each |
-| 4 | `scene_writer.py` | Write the scene script (who says what) | OpenAI gpt-4o-mini | ~$0.001 |
-| 5 | `voice_maker.py` | One voice line per script line (narrator + characters) | ElevenLabs | by characters |
-| 6 | `talking_clips.py` | Each dialogue line: character ACTS (body motion) + lip-syncs our voice; narrator beats become a moving two-character scene | Seedance 1.5 Pro + Sync lipsync (dialogue combo) + Seedance (narration) + Nano Banana Pro (scene image) | ~$0.038/sec dialogue |
-| 7 | `assemble.py` | Trim each clip to its audio, then join into the final video | ffmpeg (local) | free |
+| 3 | `gen_characters.py` | One locked vertical portrait per character (used as scene reference) | fal.ai Nano Banana Pro (2K) | $0.15 each |
+| 4 | `scene_writer.py` | Write the SCENE script (5–7 scenes; each dialogue scene = 2 characters in one room) | OpenAI gpt-4o-mini | ~$0.001 |
+| 5 | `voice_maker.py` | Clone each character's ElevenLabs voice into a reusable Kling voice_id + narrator voiceover | ElevenLabs + Kling create-voice | by characters |
+| 6 | `scene_clips.py` | Per scene: compose the characters into one shot, then animate it as a talking dialogue scene in our cloned voices | Nano Banana Pro (compose) + Kling v3 (dialogue) + Seedance (narration) | ~$0.15/sec dialogue |
+| 7 | `assemble.py` | Join the scenes into the final video | ffmpeg (local) | free |
 
 ### Results (in `output/`)
 - `final_video.mp4` — the finished vertical microdrama
@@ -72,8 +73,9 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 
 ## Files
 - `run.py` — manager (runs the whole link → final video pipeline)
-- `scrape.py`, `analyze.py`, `gen_characters.py` — story → characters + images
-- `scene_writer.py`, `voice_maker.py`, `talking_clips.py`, `assemble.py` — script → voices → clips → video
+- `scrape.py`, `analyze.py`, `gen_characters.py` — story → characters + portraits
+- `scene_writer.py`, `voice_maker.py`, `scene_clips.py`, `assemble.py` — scenes → cloned voices → scene clips → video
+- `talking_clips.py` — the OLD one-avatar-per-line renderer (kept for reference; not used by the scene pipeline)
 - `costs.py` — price list; every script prints its cost
 - `requirements.txt` — the Python libraries to install
 - `.env` — API keys (ignored by git)
@@ -82,32 +84,33 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 
 ## Rules learned
 - Everything is **vertical 9:16** (TikTok). Wide video stretches the character.
-- Cheap AI video keeps a face consistent only with **tiny motion**; big action breaks it.
-- Lip-sync models animate one portrait (close-up). The **big motion** (two
-  people in one room, standing up) comes from a separate **scene model**
-  (Seedance) used on the narration beats — that is the hybrid.
-- A talking video needs the **audio first** (the mouth copies the sound).
-- One **locked image per character**, reused every time = consistency.
-- Dialogue clips use a **two-model combo**: **Seedance** animates the photo so
-  the character acts with their body (stands up, leans in, gestures), then
-  **Sync** lip-syncs our voice onto that moving video — real acting + correct
-  lips on one clip, ~$0.038/sec (cheaper than VEED alone). VEED Fabric, Kling and
-  OmniHuman remain switchable single-model options in `talking_clips.py`.
+- The unit is a **SCENE, not a line.** Old avatar-per-line clips felt like each
+  character was alone in a separate room. A real short film needs one shot with
+  **both characters interacting** — so we generate scenes, not talking heads.
+- **Character consistency across scenes:** keep one locked portrait per character
+  (Nano Banana Pro), then feed those portraits as **references** when composing
+  each scene image, so faces stay the same.
+- **Voice consistency across scenes:** clone each character's ElevenLabs voice
+  into a **Kling voice_id** once (create-voice), then reuse that id in every
+  scene. Same voice every time, and they're our brand voices — a plain scene
+  model would invent a new voice each clip.
+- A dialogue scene may have **at most 2 speaking characters** (Kling's 2-voice
+  limit); the scene writer enforces this.
 - **ElevenLabs v3 clips the final word** — fix: append a trailing `—` so the cut
   lands on the dash, then trim the leftover silence (`voice_maker.py`).
-- Image models (Nano Banana Pro) can drift to landscape, so prompts force a tall
-  vertical portrait **and** the scene image is re-generated if it comes out wide.
+- Nano Banana can compose a wide room **sideways** to fit 9:16 — compose the room
+  **vertically** (people in front, room rising behind/above) and check it came
+  out upright.
 
 ## Costs (estimates from provider pricing)
 - Scrape: free
-- Analyze + script (OpenAI gpt-4o-mini): ~$0.002 per story
-- Character image (Nano Banana Pro, 2K): $0.15 each
-- Anonymous silhouette (FLUX dev): $0.025 each
-- Voice (ElevenLabs v3): billed by characters
-- Dialogue clip (Seedance motion $0.026/s + Sync lipsync $0.012/s): ~$0.038 per second
+- Analyze + scene script (OpenAI gpt-4o-mini): ~$0.002 per story
+- Character portrait (Nano Banana Pro, 2K): $0.15 each
+- Voice (ElevenLabs v3) + one Kling voice clone per character: by characters (clone reused every scene)
+- Composed scene image (Nano Banana Pro): $0.15 per scene
+- Dialogue scene (Kling v3 standard, audio + cloned voices): $0.154 per second
 - Narration motion (Seedance 1.5 Pro, no audio): $0.026 per second
-- Two-character scene image (Nano Banana Pro): $0.15 once per video
-- **Roughly $2.50–3.00 for one finished video**
+- **Roughly $12–15 for one finished ~75s video** (real multi-actor cinema costs more)
 
 ---
 

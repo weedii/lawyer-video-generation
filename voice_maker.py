@@ -1,15 +1,23 @@
-"""STAGE 2 - STEP 2: Make the voices for the scene.
+"""STAGE 2 - STEP 2: Voices for the scene pipeline.
 
-It reads the scene script, gives EACH character one fixed voice (so they sound
-the same the whole video), and saves one audio file per spoken line.
+NEW MODEL (Kling scene pipeline). Two jobs:
+  1. For every SPEAKING character: generate one ElevenLabs voice SAMPLE, then
+     CLONE it into a Kling voice_id (create-voice). Kling then speaks that
+     character's dialogue in OUR voice, and the SAME voice_id is reused in every
+     scene, so a character sounds identical across the whole film (voice
+     consistency — the thing plain scene models can't do).
+  2. For every NARRATION scene: generate the Narrator's ElevenLabs voiceover mp3
+     (played over the establishing shot by scene_clips.py).
 
 Usage:
     python voice_maker.py
 
 Reads:  output/analysis.json   (needs the "script" section from scene_writer.py)
-Output: output/voice_01_<name>.mp3, voice_02_<name>.mp3, ...   (one per line)
-        It also writes the voice + audio file names back INTO analysis.json.
-Cost:   ElevenLabs bills by characters. We print how many.
+Output: - writes c["voice_id"] (ElevenLabs) and c["kling_voice_id"] onto each
+          speaking character in analysis.json
+        - writes scene["audio"] (narrator mp3) onto each narration scene
+        - saves voice_sample_<name>.mp3 and voice_narr_<n>.mp3 in output/
+Cost:   ElevenLabs by characters + a one-time Kling clone per character.
 """
 import os
 import sys
@@ -17,6 +25,7 @@ import json
 import re
 import subprocess
 import requests
+import fal_client
 from dotenv import load_dotenv
 import costs
 
@@ -25,96 +34,51 @@ load_dotenv()
 KEY = os.getenv("ELEVENLABS_API_KEY")
 if not KEY:
     sys.exit("ERROR: ELEVENLABS_API_KEY is empty. Paste your key in .env.")
+if not os.getenv("FAL_KEY"):
+    sys.exit("ERROR: FAL_KEY is empty (needed to clone voices into Kling).")
 
 OUT_DIR = "output"
+MODEL_ID = "eleven_v3"                 # expressive ElevenLabs model
+CREATE_VOICE_MODEL = "fal-ai/kling-video/create-voice"   # clone -> voice_id
 
-# ElevenLabs model. eleven_v3 is their most EXPRESSIVE model: it reads emotion
-# "audio tags" like [nervous] or [scoffs] in the text and acts them out, instead
-# of the flat delivery of multilingual_v2. This is what makes the characters
-# sound alive (and, in audio-driven video, look alive). ~$0.10 / 1k characters.
-MODEL_ID = "eleven_v3"
-
-# Ready-made ElevenLabs voices, split by gender. Each character gets one and
-# keeps it for the whole video. If there are more same-gender characters than
-# voices, we cycle through the list.
-FEMALE_VOICES = [
-    "EXAVITQu4vr4xnSDxMaL",  # Sarah - young, crisp
-    "cgSgspJ2msm6clMCkdW9",  # Jessica - warm
-]
-MALE_VOICES = [
-    "JBFqnCBsd6RMkjVDRZzb",  # George - deep, steady
-    "nPczCjzI2devNBz1zQrb",  # Brian - calm
-]
-
-# Fixed voice for the Narrator (the intro hook + the cliffhanger voiceover).
-# Daniel - deep, authoritative, documentary/narration feel.
-NARRATOR_VOICE = "onwK4e9ZLuTAKqWW03F9"
+# Ready-made ElevenLabs voices by gender; each character keeps one.
+FEMALE_VOICES = ["EXAVITQu4vr4xnSDxMaL", "cgSgspJ2msm6clMCkdW9"]
+MALE_VOICES = ["JBFqnCBsd6RMkjVDRZzb", "nPczCjzI2devNBz1zQrb"]
+NARRATOR_VOICE = "onwK4e9ZLuTAKqWW03F9"   # Daniel — deep, documentary narrator
 
 
 def slug(name: str) -> str:
-    """Turn 'Leo Finnegan' into 'leo_finnegan' for safe file names."""
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
 
 def character_gender(character: dict) -> str:
-    """Use the explicit 'gender' field from analyze.py. If it is missing (older
-    files), fall back to guessing from the description. Checks female first
-    because the word 'woman' contains 'man'."""
     gender = str(character.get("gender", "")).strip().lower()
     if gender in ("male", "female"):
         return gender
-
-    text = (
-        f"{character.get('role', '')} {character.get('appearance', '')} "
-        f"{character.get('personality', '')}"
-    ).lower()
+    text = (f"{character.get('role','')} {character.get('appearance','')} "
+            f"{character.get('personality','')}").lower()
     if any(w in text for w in ["woman", "female", "she ", "her ", "daughter", "mrs", "ms "]):
         return "female"
-    return "male"  # default to male if unclear
-
-
-def assign_voices(characters: list[dict]) -> dict:
-    """Give each character one fixed voice id. Returns {name: voice_id}."""
-    mapping = {}
-    f_i, m_i = 0, 0
-    for c in characters:
-        name = c["fictional_name"]
-        if character_gender(c) == "female":
-            mapping[name] = FEMALE_VOICES[f_i % len(FEMALE_VOICES)]
-            f_i += 1
-        else:
-            mapping[name] = MALE_VOICES[m_i % len(MALE_VOICES)]
-            m_i += 1
-        c["voice_id"] = mapping[name]  # save it on the character too
-    return mapping
+    return "male"
 
 
 def trim_trailing_silence(path: str):
-    """Cut silence off the END of an mp3 (ffmpeg), keeping a tiny 0.1s tail.
-    We add a trailing pause to the text (see make_voice) to stop v3 clipping the
-    last word; this removes the dead air that pause leaves, without touching the
-    speech. Conservative -50dB threshold so a soft word ending is never cut."""
+    """Cut silence off the END of an mp3, keeping a tiny 0.1s tail (see below)."""
     tmp = path + ".trim.mp3"
     r = subprocess.run([
         "ffmpeg", "-y", "-i", path, "-af",
         "areverse,silenceremove=start_periods=1:start_threshold=-50dB:"
-        "start_silence=0.1,areverse",
-        tmp,
+        "start_silence=0.1,areverse", tmp,
     ], capture_output=True)
     if r.returncode == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 0:
         os.replace(tmp, path)
     elif os.path.exists(tmp):
-        os.remove(tmp)   # trim failed — keep the original untouched
+        os.remove(tmp)
 
 
 def make_voice(text: str, voice_id: str, out_path: str):
-    """Send one line to ElevenLabs (v3) and save the mp3. The text may contain
-    emotion tags like '[nervous]' which v3 acts out rather than reads aloud.
-
-    v3 has a habit of CLIPPING the final word (e.g. 'anyone' -> 'anyo'), even
-    when the line ends with a period. Fix: append a trailing ' —' so the real
-    last word is no longer at the cut boundary (verified: it restores the word).
-    We then trim the extra trailing pause so no dead air is added."""
+    """Send one line to ElevenLabs (v3) and save the mp3. v3 clips the final word,
+    so we append a trailing ' —' (the cut lands on the dash) then trim the silence."""
     buffered = text.rstrip()
     if buffered and buffered[-1] not in "—-…":
         buffered += " —"
@@ -130,71 +94,100 @@ def make_voice(text: str, voice_id: str, out_path: str):
     trim_trailing_silence(out_path)
 
 
+def clone_to_kling(sample_path: str) -> str:
+    """Upload an ElevenLabs voice sample and clone it into a reusable Kling
+    voice_id (create-voice). Returns the voice_id, or "" on failure."""
+    url = fal_client.upload_file(sample_path)
+    r = fal_client.subscribe(CREATE_VOICE_MODEL, arguments={"voice_url": url},
+                             with_logs=False)
+    return r.get("voice_id") or r.get("id") or (r.get("data") or {}).get("voice_id", "")
+
+
+def speaking_characters(scenes: list) -> list:
+    """Ordered, unique list of character names that actually speak in dialogue."""
+    order = []
+    for sc in scenes:
+        if sc.get("type") == "dialogue":
+            for d in sc.get("dialogue", []):
+                if d["character"] not in order:
+                    order.append(d["character"])
+    return order
+
+
 def main():
     analysis_path = os.path.join(OUT_DIR, "analysis.json")
     if not os.path.exists(analysis_path):
         sys.exit("Missing output/analysis.json. Run the pipeline first.")
-
     with open(analysis_path) as f:
         data = json.load(f)
 
     script = data.get("script")
-    if not script or not script.get("lines"):
-        sys.exit("No script found. Run scene_writer.py first.")
+    if not script or not script.get("scenes"):
+        sys.exit("No scenes found. Run scene_writer.py first.")
+    scenes = script["scenes"]
+    chars_by_name = {c["fictional_name"]: c for c in data.get("characters", [])}
 
-    # Step 1: give every character a fixed voice.
-    voices = assign_voices(data.get("characters", []))
-    print("Voice for each character:")
-    for name, vid in voices.items():
-        print(f"  {name} -> {vid}")
-    print(f"  Narrator -> {NARRATOR_VOICE}\n")
+    total_chars = 0     # ElevenLabs character count (for cost estimate)
+    clones = 0          # how many Kling voices we cloned
 
-    # Step 2: make one audio file per line, in order.
-    lines = script["lines"]
-    total_chars = 0
-    print(f"Making {len(lines)} voice lines ...")
-    for i, ln in enumerate(lines, 1):
-        name = ln["character"]
-        # Narration lines use the fixed narrator voice (the narrator is not part
-        # of the cast). Everyone else uses their assigned character voice.
-        # Anonymous people (Person A/B) ARE in the cast, so assign_voices already
-        # gave them a gender-matched voice here — they are voiced like anyone else.
-        if ln.get("type") == "narration" or name == "Narrator":
-            voice_id = NARRATOR_VOICE
+    # --- 1. One cloned voice per speaking character ------------------------
+    speakers = speaking_characters(scenes)
+    print(f"Cloning voices for {len(speakers)} speaking characters ...")
+    f_i = m_i = 0
+    for name in speakers:
+        c = chars_by_name.get(name)
+        if not c:
+            print(f"  note: speaker '{name}' not in cast, skipping clone.")
+            continue
+        # Assign a gender-matched ElevenLabs voice.
+        if character_gender(c) == "female":
+            eleven = FEMALE_VOICES[f_i % len(FEMALE_VOICES)]; f_i += 1
         else:
-            voice_id = voices.get(name)
-        if not voice_id:
-            # The script named someone not in the cast. Don't drop the line
-            # (that silently breaks the conversation) — voice it with the
-            # narrator voice so it is still heard.
-            print(f"  [{i}] note: '{name}' not in cast, using narrator voice.")
-            voice_id = NARRATOR_VOICE
+            eleven = MALE_VOICES[m_i % len(MALE_VOICES)]; m_i += 1
+        c["voice_id"] = eleven
 
-        # Act the line's emotion: prepend it as a v3 audio tag so the voice
-        # delivers it with feeling (e.g. "[smug] It's just banter."). The tag is
-        # interpreted, not spoken. Lines may also carry inline tags already.
-        emotion = (ln.get("emotion") or "").strip()
-        spoken = f"[{emotion}] {ln['line']}" if emotion else ln["line"]
+        # Build a clone SAMPLE from the character's own lines (must be >=5s for
+        # create-voice); pad with a neutral line if their dialogue is too short.
+        own_lines = [d["line"] for sc in scenes if sc.get("type") == "dialogue"
+                     for d in sc["dialogue"] if d["character"] == name]
+        sample_text = " ".join(own_lines)
+        if len(sample_text) < 200:      # ~ under ~12s of speech: pad it
+            sample_text += (" I have spent my whole career at the Bar, and I know "
+                            "exactly how these proceedings work.")
+        sample_path = os.path.join(OUT_DIR, f"voice_sample_{slug(name)}.mp3")
+        make_voice(sample_text, eleven, sample_path)
+        total_chars += len(sample_text)
 
-        file_name = f"voice_{i:02d}_{slug(name)}.mp3"
-        out_path = os.path.join(OUT_DIR, file_name)
-        make_voice(spoken, voice_id, out_path)
+        kling_id = clone_to_kling(sample_path)
+        c["kling_voice_id"] = kling_id
+        clones += 1
+        print(f"  {name}: ElevenLabs {eleven} -> Kling voice_id {kling_id}")
 
-        ln["audio"] = file_name          # remember the audio file for this line
-        total_chars += len(spoken)
-        print(f"  [{i}] {name}{f' [{emotion}]' if emotion else ''}: saved {file_name}")
+    # --- 2. Narrator voiceover for each narration scene -------------------
+    n = 0
+    for i, sc in enumerate(scenes, 1):
+        if sc.get("type") != "narration":
+            continue
+        n += 1
+        text = sc.get("narration", "")
+        file_name = f"voice_narr_{i:02d}.mp3"
+        make_voice(text, NARRATOR_VOICE, os.path.join(OUT_DIR, file_name))
+        sc["audio"] = file_name
+        total_chars += len(text)
+        print(f"  Narration scene {i}: saved {file_name}")
 
-    # Record this step's cost for the end-of-pipeline summary (estimate).
-    est = total_chars / 1000 * costs.ELEVENLABS_PER_1K_CHARS
+    # --- Cost (ElevenLabs by characters + Kling clone fee) ----------------
+    est = (total_chars / 1000 * costs.ELEVENLABS_PER_1K_CHARS
+           + clones * costs.KLING_CREATE_VOICE_PER)
     costs.record(data, "voices",
-                 f"Voices - ElevenLabs {MODEL_ID} (~{total_chars} chars)", est)
+                 f"Voices - ElevenLabs {MODEL_ID} (~{total_chars} chars) + "
+                 f"{clones} Kling voice clones", est)
 
-    # Save the voice + audio info back into analysis.json (one place for all).
     with open(analysis_path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-    print("\nUpdated output/analysis.json with voices + audio files.")
-    costs.show(f"voices ({total_chars} characters, estimate)", est)
+    print(f"\nUpdated analysis.json with {clones} cloned voice_ids + {n} narrator lines.")
+    costs.show(f"voices ({total_chars} chars, {clones} clones)", est)
 
 
 if __name__ == "__main__":

@@ -3,11 +3,11 @@
 You give it a story link. It runs the other scripts in order:
     1. scrape.py          -> download the story
     2. analyze.py         -> organize it + invent characters
-    3. gen_characters.py  -> make one image per character
-    4. scene_writer.py    -> write the scene script (who says what)
-    5. voice_maker.py     -> make the voice for every line
-    6. talking_clips.py   -> make a talking clip for every line
-    7. assemble.py        -> join the clips into the final video
+    3. gen_characters.py  -> make one locked portrait per character
+    4. scene_writer.py    -> write the SCENE script (who is in each scene + dialogue)
+    5. voice_maker.py     -> clone each character's voice + narrator voiceover
+    6. scene_clips.py     -> render one cinematic SCENE clip per beat (Kling)
+    7. assemble.py        -> join the scenes into the final video
 The result is output/final_video.mp4.
 
 Usage:
@@ -42,11 +42,11 @@ if __name__ == "__main__":
     # The steps, in order. scrape needs the link; the others read files.
     step("STEP 1/7", "Scrape the story", ["scrape.py", url])
     step("STEP 2/7", "Analyze story + invent characters", ["analyze.py"])
-    step("STEP 3/7", "Make an image for each character", ["gen_characters.py"])
+    step("STEP 3/7", "Make a locked portrait for each character", ["gen_characters.py"])
     step("STEP 4/7", "Write the scene script", ["scene_writer.py"])
-    step("STEP 5/7", "Make the voice for every line", ["voice_maker.py"])
-    step("STEP 6/7", "Make a talking clip for every line", ["talking_clips.py"])
-    step("STEP 7/7", "Join the clips into the final video", ["assemble.py"])
+    step("STEP 5/7", "Clone character voices + narrator voiceover", ["voice_maker.py"])
+    step("STEP 6/7", "Render one cinematic scene clip per beat", ["scene_clips.py"])
+    step("STEP 7/7", "Join the scenes into the final video", ["assemble.py"])
 
     print("\n" + "=" * 55, flush=True)
     print("  ALL DONE", flush=True)

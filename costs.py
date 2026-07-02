@@ -77,6 +77,24 @@ VEED_FABRIC_720P_PER_SEC = 0.15
 #     fal.ai/models/fal-ai/bytedance/seedance/v1.5/pro/image-to-video
 SEEDANCE_PRO_PER_SEC = 0.026
 
+# --- Scene model (Kling v3) — the scene pipeline's main cost ----------------
+# Kling v3 standard image-to-video: animates a composed two-character image into
+# a cinematic dialogue SHOT with native voices. We pass our cloned voice_ids, so
+# we're on the "voice control" tier. Prices from fal (per second of output):
+#   $0.084/s  no audio
+#   $0.126/s  with audio (model picks voices)
+#   $0.154/s  with audio + voice control (our cloned voice_ids)  <- what we use
+#     fal.ai/models/fal-ai/kling-video/v3/standard/image-to-video
+KLING_V3_STD_NOAUDIO_PER_SEC = 0.084
+KLING_V3_STD_AUDIO_PER_SEC = 0.126
+KLING_V3_STD_VOICE_PER_SEC = 0.154
+
+# Kling create-voice: clone one ElevenLabs sample -> a reusable voice_id. Done
+# ONCE per character (reused in every scene), not per clip. fal did not surface a
+# per-call charge in testing; treated as ~free here — update if it starts billing.
+#     fal.ai/models/fal-ai/kling-video/create-voice
+KLING_CREATE_VOICE_PER = 0.0
+
 # Sync lipsync (fal-ai/sync-lipsync): takes a VIDEO + our voice and redoes the
 # MOUTH to match. We run it AFTER Seedance so a moving clip (character stands up,
 # gestures) also lip-syncs our ElevenLabs voice. This is the "two models on one

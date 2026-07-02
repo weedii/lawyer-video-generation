@@ -3,9 +3,9 @@
 It joins the clips, in script order, into one vertical video and (optionally)
 adds background music. No captions.
 
-Quality first: the clips can be high resolution (e.g. OmniHuman is 1088x1920).
-So we DON'T downscale them — we find the biggest clip size and render the whole
-video at that size and frame rate, re-encoding at near-lossless quality.
+Quality first: the scene clips can be high resolution (Kling scenes are ~9:16
+HD). So we DON'T downscale them — we find the biggest clip size and render the
+whole video at that size and frame rate, re-encoding at near-lossless quality.
 
 Motion: a gentle zoom that alternates in/out per clip so the video breathes.
 It is done on a 2x-SUPERSAMPLED frame at the clips' native size, so it stays
@@ -18,7 +18,7 @@ Clean joins (all FREE, ffmpeg):
 Usage:
     python assemble.py
 
-Reads:  output/analysis.json   (script lines, each with a "clip" file)
+Reads:  output/analysis.json   (script scenes, each with a "clip" file)
         output/music.mp3        (OPTIONAL background music; used if present)
 Output: output/final_video.mp4
 Cost:   free (runs locally with ffmpeg).
@@ -121,37 +121,34 @@ def main():
     with open(analysis_path) as f:
         data = json.load(f)
 
-    lines = (data.get("script") or {}).get("lines", [])
-    clips = [ln for ln in lines if ln.get("clip")]
+    scenes = (data.get("script") or {}).get("scenes", [])
+    clips = [sc for sc in scenes if sc.get("clip")]
     if not clips:
-        sys.exit("No talking clips found. Run talking_clips.py first.")
+        sys.exit("No scene clips found. Run scene_clips.py first.")
 
     # Pick the target size = the BIGGEST clip, so we never downscale good clips.
-    paths = [os.path.join(OUT_DIR, ln["clip"]) for ln in clips]
+    paths = [os.path.join(OUT_DIR, sc["clip"]) for sc in clips]
     dims = [video_dims(p) for p in paths]
     target_w, target_h = max(dims, key=lambda wh: wh[0] * wh[1])
-    print(f"Assembling {len(clips)} clips at {target_w}x{target_h} ...")
+    print(f"Assembling {len(clips)} scenes at {target_w}x{target_h} ...")
 
     # 1) Normalise each clip to the common size/fps/quality (no zoom, no downscale).
     normalised = []
-    for i, ln in enumerate(clips, 1):
-        in_path = os.path.join(OUT_DIR, ln["clip"])
+    for i, sc in enumerate(clips, 1):
+        in_path = os.path.join(OUT_DIR, sc["clip"])
         out_path = os.path.join(OUT_DIR, f"_norm_{i:02d}.mp4")
 
-        # Only trim when a clip is MUCH longer than its speech (Kling pads with
-        # ~3s of dead air). OmniHuman already matches the audio, so trimming to
-        # the mp3 length would chop a few ms off the real ending -> bad cut.
-        clip_dur = audio_duration(in_path)
-        audio_dur = (audio_duration(os.path.join(OUT_DIR, ln["audio"]))
-                     if ln.get("audio") else clip_dur)
-        dur = audio_dur if (clip_dur - audio_dur) > 0.5 else clip_dur
+        # Scene clips are already the right length: Kling renders the requested
+        # duration and the narration clips are pre-trimmed to the voiceover. So we
+        # keep each clip's full length (no trimming that could chop a last word).
+        dur = audio_duration(in_path)
 
         # Alternate the zoom direction so the video breathes in and out.
         zoom_in = (i % 2 == 1)
         normalise(in_path, out_path, dur, target_w, target_h, zoom_in=zoom_in,
                   is_first=(i == 1), is_last=(i == len(clips)))
         normalised.append(out_path)
-        print(f"  [{i}] prepared {ln['clip']} -> {dur:.2f}s ({'zoom in' if zoom_in else 'zoom out'})")
+        print(f"  [{i}] prepared {sc['clip']} -> {dur:.2f}s ({'zoom in' if zoom_in else 'zoom out'})")
 
     # 2) Join them all in order (hard cuts).
     list_file = os.path.join(OUT_DIR, "_concat.txt")

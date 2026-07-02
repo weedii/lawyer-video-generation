@@ -1,17 +1,21 @@
-"""STAGE 2 - STEP 1: Write the scene script for the microdrama.
+"""STAGE 2 - STEP 1: Write the SCENE script for the microdrama (scene-based).
+
+NEW MODEL (Kling scene pipeline): the unit is a SCENE, not a single line. Each
+scene is one cinematic shot where the characters ACT and talk TO EACH OTHER —
+like a real short film — instead of one avatar talking to camera per line.
 
 It reads the analyzed story + characters AND the raw scraped story, then writes
-an organized scene with a real arc:
-  - a NARRATION hook to open (set up the scandal),
-  - dialogue that dramatizes the REAL events (built through story beats),
-  - a NARRATION cliffhanger to close.
+5-7 scenes with a real arc:
+  - a NARRATION hook scene to open (voiceover over an establishing shot),
+  - DIALOGUE scenes that dramatize the REAL events (two people in one room),
+  - a NARRATION cliffhanger scene to close.
 
 Usage:
     python scene_writer.py
 
 Reads:  output/analysis.json   (characters + summary, from analyze.py)
         output/scraped.json     (the raw story facts, so dialogue is specific)
-Output: adds a "script" section INTO output/analysis.json
+Output: adds a "script" section (with "scenes") INTO output/analysis.json
         and appends it to output/analysis.md so you can read it.
 Cost:   ~$0.001 (cheap OpenAI model).
 """
@@ -32,95 +36,116 @@ if not KEY:
 MODEL = "gpt-4o-mini"
 OUT_DIR = "output"
 
-# Rewritten prompt: forces a real story shape (intro -> arc -> cliffhanger),
-# demands specific facts + jargon, and bans the generic filler we got before.
+# HARD LIMIT from the video model: Kling generates at most TWO distinct voices
+# per scene, so every dialogue scene may have AT MOST 2 speaking characters.
 SYSTEM_PROMPT = """
 You write short vertical TikTok microdramas for an audience of young lawyers,
-based on a REAL legal news story. Make a tight, ORGANIZED scene with a clear arc
-— not just two people arguing.
+based on a REAL legal news story. Write it as a SHORT FILM broken into SCENES —
+each scene is one continuous shot where the characters act and talk TO EACH OTHER
+in the same room, like real actors. This is NOT one person talking to camera.
 
 Speakers:
-- Use ONLY the given characters for dialogue. Write each line's "character"
-  field EXACTLY as the name given in the cast — copy the name only, never add
-  extra words like "anonymous".
-- Some characters are marked "anonymous" inside their description — these are
-  real but unnamed people (e.g. a junior colleague). USE them as normal speakers
-  with their exact name (e.g. "Junior Associate"); they matter to the scene.
-- Also use a "Narrator" for short voiceover lines (the hook and the cliffhanger).
+- Use ONLY the given characters for dialogue. Write each "character" field EXACTLY
+  as the name given in the cast — copy the name only, never add extra words.
+- Some characters are marked "anonymous" inside their description — real but
+  unnamed people (e.g. a junior colleague). You MAY use them as speakers.
+- Also use a "Narrator" for the opening hook and closing cliffhanger (voiceover).
 
-STRUCTURE (this is the whole point — give it a beginning, middle and end):
-1. OPEN with exactly one narration line (beat "intro"): a punchy hook that sets
-   up the scandal in one sentence, so the viewer instantly understands it.
-2. MIDDLE: dialogue that DRAMATIZES THE REAL EVENTS from the story, building
-   through the beats "setup" -> "escalation" -> "twist".
-3. CLOSE with exactly one narration line (beat "cliffhanger"): a strong button
-   that leaves the viewer wanting the next episode.
+STRUCTURE (a real beginning, middle and end) — 5 to 7 SCENES total:
+1. OPEN with exactly one NARRATION scene (beat "intro"): a punchy one-sentence
+   voiceover hook that sets up the scandal.
+2. MIDDLE: 3 to 5 DIALOGUE scenes that DRAMATIZE THE REAL EVENTS, building through
+   the beats "setup" -> "escalation" -> "twist". Each scene is two characters
+   confronting each other in one place.
+3. CLOSE with exactly one NARRATION scene (beat "cliffhanger"): a strong button.
 
 HARD RULES:
-- Every DIALOGUE line must reference a CONCRETE fact from the story (a real
-  event, place, document, ruling). No vague feelings-only lines.
-- BANNED generic filler — NEVER write lines like "trust me", "I won't abandon
-  you", "was it worth it", "we can't give up", "I did what I had to". Forbidden.
-- Keep the legal jargon (injunction, rights of audience, struck off, tribunal,
-  inquest, etc.) and do NOT explain it.
-- 10 to 14 lines total, including the 2 narration lines.
-- Set the scene in the REAL location where the drama actually happened.
+- A DIALOGUE scene has AT MOST TWO speaking characters (the video model allows
+  only two voices per shot). Pick the two who matter for that beat.
+- Each dialogue scene has 2 to 4 short lines total, alternating between the two
+  characters so they actually talk to each other.
+- Every DIALOGUE line must reference a CONCRETE fact from the story (a real event,
+  place, document, ruling). No vague feelings-only lines.
+- BANNED generic filler — NEVER write "trust me", "I won't abandon you", "was it
+  worth it", "we can't give up", "I did what I had to". Forbidden.
+- Keep the legal jargon (injunction, struck off, tribunal, inquest, rights of
+  audience, etc.) and do NOT explain it.
+- Set every scene in the REAL location where the drama happened.
 
-PERFORMANCE (make it emotional, not flat — this is what stops it being boring):
-- Give EVERY line an "emotion": ONE short delivery cue the voice can act, such as
-  nervous, smug, angry, sarcastic, cold, panicked, resigned, amused, tense,
-  defensive, contemptuous. Pick the one that fits the moment.
-- You MAY also drop a short inline cue inside a line for a reaction, written in
-  square brackets, e.g. "[scoffs] You actually believe that?" or
-  "[sigh] I warned you." Use these sparingly, only when they add punch.
-- Give EVERY line a "camera": a short shot direction for the video, such as
-  "slow push-in", "static close-up", "slight handheld", or "quick zoom".
-- Give EVERY dialogue line an "action": an actor's stage direction — what the
-  character physically DOES with their body and hands WHILE saying the line.
-  Use upper-body actions and gestures that read on camera, e.g. "leans forward
-  and jabs a finger at the table", "takes off glasses and pinches the bridge of
-  his nose", "slams a folder shut", "crosses arms and looks away", "straightens
-  his tie, jaw tight". Keep it short and doable on camera (do NOT leave frame,
-  no walking away). For narration lines, leave "action" as "".
+FOR EACH SCENE also give:
+- "shot": a cinematic shot + camera direction (e.g. "medium two-shot, slow dolly
+  in", "over-the-shoulder close-up", "static wide").
+- "action": the BLOCKING — what the characters physically DO in the shot and how
+  they relate in space (e.g. "the father sits at the table gripping a file; the
+  daughter stands over him, arms crossed, then leans in"). Describe the
+  interaction and eyelines so they read as being in the same room.
+- For DIALOGUE lines, an "emotion": one delivery cue (weary, smug, panicked,
+  cold, defensive, contemptuous, ...).
 
 Return ONLY valid JSON with exactly this shape:
 {
   "title": "short episode title",
-  "setting": "one line: the real place where this scene happens",
-  "lines": [
-    {"type": "narration | dialogue", "character": "Narrator OR exact character name", "line": "what is said", "beat": "intro | setup | escalation | twist | cliffhanger", "emotion": "one delivery cue", "camera": "short shot direction", "action": "what the character physically does while speaking"}
+  "setting": "one line: the real place where this drama happens",
+  "scenes": [
+    {"type": "narration", "beat": "intro", "setting": "the real place", "shot": "shot + camera", "action": "what is seen in the establishing shot", "characters": [], "narration": "the voiceover hook", "dialogue": []},
+    {"type": "dialogue", "beat": "setup", "setting": "the real place", "shot": "shot + camera", "action": "blocking: what the two characters physically do and how they face each other", "characters": ["Exact Name A", "Exact Name B"], "narration": "", "dialogue": [{"character": "Exact Name A", "line": "what is said", "emotion": "cue"}, {"character": "Exact Name B", "line": "reply", "emotion": "cue"}]}
   ]
 }
 """
 
 
-def clean_lines(script: dict) -> dict:
-    """The model sometimes slips a stray value into the lines list (valid JSON
-    but wrong shape). Keep only proper line objects and fill any missing fields,
-    so the rest of the pipeline always gets clean, predictable data."""
+def clean_scenes(script: dict) -> dict:
+    """Keep only well-formed scenes and fill any missing fields, so the rest of
+    the pipeline always gets clean, predictable data. Also enforce the 2-speaker
+    limit per dialogue scene (the video model's hard cap)."""
     cleaned = []
-    for ln in script.get("lines", []):
-        if not isinstance(ln, dict) or not ln.get("line"):
-            continue  # skip stray strings / broken entries
-        cleaned.append({
-            "type": ln.get("type", "dialogue"),
-            "character": ln.get("character", "Narrator"),
-            "line": ln["line"],
-            "beat": ln.get("beat", ""),
-            # Performance cues: emotion drives the voice (voice_maker.py); camera
-            # and action drive the video (talking_clips.py builds the motion
-            # prompt from them). Default to empty so the pipeline always has them.
-            "emotion": ln.get("emotion", ""),
-            "camera": ln.get("camera", ""),
-            "action": ln.get("action", ""),
-        })
-    script["lines"] = cleaned
+    for sc in script.get("scenes", []):
+        if not isinstance(sc, dict):
+            continue
+        stype = sc.get("type", "dialogue")
+        scene = {
+            "type": stype,
+            "beat": sc.get("beat", ""),
+            "setting": sc.get("setting", script.get("setting", "")),
+            "shot": sc.get("shot", ""),
+            "action": sc.get("action", ""),
+            "characters": [],
+            "narration": (sc.get("narration") or "").strip(),
+            "dialogue": [],
+        }
+        if stype == "narration":
+            if not scene["narration"]:
+                continue  # a narration scene with no voiceover is useless
+        else:
+            # Keep only proper dialogue lines.
+            lines = [
+                {
+                    "character": d.get("character", ""),
+                    "line": d["line"],
+                    "emotion": d.get("emotion", ""),
+                }
+                for d in sc.get("dialogue", [])
+                if isinstance(d, dict) and d.get("line") and d.get("character")
+            ]
+            if not lines:
+                continue
+            # Speaking characters, in first-appearance order, capped at TWO.
+            order = []
+            for d in lines:
+                if d["character"] not in order:
+                    order.append(d["character"])
+            speakers = order[:2]
+            # Drop any line whose speaker isn't one of the (max 2) kept speakers.
+            lines = [d for d in lines if d["character"] in speakers]
+            scene["characters"] = speakers
+            scene["dialogue"] = lines
+        cleaned.append(scene)
+    script["scenes"] = cleaned
     return script
 
 
-def leaked_names(script: dict, banned: list[str]) -> list[str]:
-    """Check if any banned REAL name still appears anywhere in the script. Same
-    whole-word check analyze.py uses, so 'Bar' inside 'Barrister' doesn't count."""
+def leaked_names(script: dict, banned: list) -> list:
+    """Check if any banned REAL name still appears anywhere in the script."""
     blob = json.dumps(script).lower()
     leaks = []
     for name in banned:
@@ -129,30 +154,18 @@ def leaked_names(script: dict, banned: list[str]) -> list[str]:
     return leaks
 
 
-def write_script(data: dict, story_body: str) -> tuple[dict, float]:
-    # timeout: don't hang forever if OpenAI is slow. max_retries: auto-retry.
+def write_script(data: dict, story_body: str):
     client = OpenAI(api_key=KEY, timeout=45.0, max_retries=3)
 
-    # Build the cast list the writer must use (name, role, gender, personality).
-    # IMPORTANT: keep the NAME clean. We mark anonymity INSIDE the parentheses,
-    # never glued to the name — otherwise the writer copies "(anonymous)" into the
-    # speaker name and it stops matching the character everywhere downstream.
+    # Cast list. Keep the NAME clean; anonymity marked INSIDE the parentheses.
     cast = "\n".join(
         f"- {c['fictional_name']} "
         f"({c['role']}{', anonymous' if c.get('anonymous') else ''}, "
         f"{c.get('gender', '')}): {c.get('personality', '')}"
         for c in data.get("characters", [])
     )
-
-    # The REAL names that analyze.py already replaced. We reuse the SAME list so
-    # the script can never leak a real name (e.g. the narrator saying "Griffiths"
-    # instead of the fictional "Lawrence Cartwright").
     banned = data.get("real_names", [])
 
-    # Give the model the REAL story facts (the scraped body) plus the summary,
-    # so the dialogue can use specific events instead of generic emotion.
-    # NOTE: the scraped story uses real names; the writer must use the fictional
-    # cast names below, so we tell it to map real people onto the given cast.
     user_content = (
         f"REAL STORY (use these facts and details, but map any real people onto "
         f"the fictional cast below):\n{story_body}\n\n"
@@ -161,8 +174,6 @@ def write_script(data: dict, story_body: str) -> tuple[dict, float]:
         f"CAST (use only these names for dialogue):\n{cast}"
     )
 
-    # Generate, then leak-check against the banned real names. Retry once if any
-    # real name slipped through, telling the model exactly which to replace.
     total_cost = 0.0
     extra = ""
     script = {}
@@ -171,11 +182,11 @@ def write_script(data: dict, story_body: str) -> tuple[dict, float]:
         if banned:
             ban_note = (
                 "\n\nBANNED NAMES — these REAL names appear in the source story. "
-                "NEVER write any of them in ANY line (narration or dialogue). Use "
-                "ONLY the fictional cast names you are given instead:\n"
+                "NEVER write any of them in ANY scene (narration or dialogue). Use "
+                "ONLY the fictional cast names instead:\n"
                 f"{', '.join(banned)}{extra}"
             )
-        print(f"Writing the script with {MODEL} ... (attempt {attempt + 1})")
+        print(f"Writing the scene script with {MODEL} ... (attempt {attempt + 1})")
         resp = client.chat.completions.create(
             model=MODEL,
             messages=[
@@ -183,39 +194,39 @@ def write_script(data: dict, story_body: str) -> tuple[dict, float]:
                 {"role": "user", "content": user_content},
             ],
             response_format={"type": "json_object"},
-            temperature=0.8,  # a bit more creative for drama
+            temperature=0.8,
         )
         total_cost += costs.openai_cost(
             resp.usage.prompt_tokens, resp.usage.completion_tokens
         )
-        script = clean_lines(json.loads(resp.choices[0].message.content))
+        script = clean_scenes(json.loads(resp.choices[0].message.content))
 
         leaks = leaked_names(script, banned)
         if not leaks:
-            break  # clean script, done
-        # A real name slipped through — name them and retry once.
+            break
         print(f"  Leaked real names {leaks}; rewriting ...")
         extra = (
             f"\nYou previously leaked these — they are STILL banned: "
-            f"{', '.join(leaks)}. Replace each with the matching fictional cast character."
+            f"{', '.join(leaks)}. Replace each with the matching fictional character."
         )
 
     return script, total_cost
 
 
 def append_markdown(script: dict, path: str):
-    """Add a readable version of the script to analysis.md, showing the beat of
-    each line and marking narration vs dialogue."""
+    """Add a readable version of the scene script to analysis.md."""
     lines = [f"\n\n## Script: {script.get('title', '')}",
              f"*Setting: {script.get('setting', '')}*\n"]
-    for ln in script.get("lines", []):
-        beat = ln.get("beat", "")
-        emo = f" [{ln['emotion']}]" if ln.get("emotion") else ""   # show the delivery cue
-        # Narration lines are voiceover; dialogue lines are spoken by a character.
-        if ln.get("type") == "narration":
-            lines.append(f"- _({beat}) Narrator:_{emo} {ln['line']}")
+    for i, sc in enumerate(script.get("scenes", []), 1):
+        beat = sc.get("beat", "")
+        lines.append(f"\n**Scene {i} ({beat}) — {sc.get('shot', '')}**")
+        lines.append(f"_{sc.get('action', '')}_")
+        if sc.get("type") == "narration":
+            lines.append(f"- _Narrator:_ {sc.get('narration', '')}")
         else:
-            lines.append(f"- **{ln['character']}** _({beat})_{emo}: {ln['line']}")
+            for d in sc.get("dialogue", []):
+                emo = f" [{d['emotion']}]" if d.get("emotion") else ""
+                lines.append(f"- **{d['character']}**{emo}: {d['line']}")
     with open(path, "a") as f:
         f.write("\n".join(lines) + "\n")
 
@@ -228,8 +239,6 @@ if __name__ == "__main__":
     with open(analysis_path) as f:
         data = json.load(f)
 
-    # Load the raw scraped story so the writer has the real, specific facts.
-    # If it is missing, fall back to just the summary.
     scraped_path = os.path.join(OUT_DIR, "scraped.json")
     story_body = data["summary"]
     if os.path.exists(scraped_path):
@@ -238,24 +247,25 @@ if __name__ == "__main__":
 
     script, cost = write_script(data, story_body)
 
-    # Record this step's real cost for the end-of-pipeline summary.
-    costs.record(data, "script", f"Write the scene dialogue - OpenAI {MODEL}", cost)
+    costs.record(data, "script", f"Write the scene script - OpenAI {MODEL}", cost)
 
-    # Save the script back INTO analysis.json (everything in one place).
     data["script"] = script
     with open(analysis_path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-    # Add a readable copy to analysis.md.
     append_markdown(script, os.path.join(OUT_DIR, "analysis.md"))
 
-    # Show what we got, marking narration lines and beats.
+    scenes = script.get("scenes", [])
     print(f"\nTitle: {script.get('title', '')}")
     print(f"Setting: {script.get('setting', '')}")
-    print(f"Lines: {len(script.get('lines', []))}\n")
-    for ln in script.get("lines", []):
-        who = "Narrator" if ln.get("type") == "narration" else ln["character"]
-        print(f"  ({ln.get('beat', '')}) {who}: {ln['line']}")
+    print(f"Scenes: {len(scenes)}\n")
+    for i, sc in enumerate(scenes, 1):
+        if sc.get("type") == "narration":
+            print(f"  Scene {i} ({sc.get('beat')}) NARRATION: {sc.get('narration')}")
+        else:
+            who = " + ".join(sc.get("characters", []))
+            print(f"  Scene {i} ({sc.get('beat')}) DIALOGUE [{who}], "
+                  f"{len(sc.get('dialogue', []))} lines")
 
-    print("\nSaved script -> output/analysis.json (and analysis.md)")
-    costs.show("OpenAI script", cost)
+    print("\nSaved scene script -> output/analysis.json (and analysis.md)")
+    costs.show("OpenAI scene script", cost)
