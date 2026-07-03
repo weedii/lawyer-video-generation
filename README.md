@@ -75,8 +75,8 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 - `run.py` — manager (runs the whole link → final video pipeline)
 - `scrape.py`, `analyze.py`, `gen_characters.py` — story → characters + portraits
 - `scene_writer.py`, `voice_maker.py`, `scene_clips.py`, `assemble.py` — scenes → cloned voices → scene clips → video
-- `talking_clips.py` — the OLD one-avatar-per-line renderer (kept for reference; not used by the scene pipeline)
 - `costs.py` — price list; every script prints its cost
+- `costlog.py`, `reconcile.py`, `sitecustomize.py` — cost spy: with `COSTLOG=1` set, log every API call and compute the REAL cost from actual billed units
 - `requirements.txt` — the Python libraries to install
 - `.env` — API keys (ignored by git)
 

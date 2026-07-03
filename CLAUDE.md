@@ -22,7 +22,7 @@ Grow one or several accounts, then **sell ads to legal tech companies**.
 - **Characters:** invented from scratch, must stay consistent across videos.
 
 ## The tools (API keys in `.env`)
-- **fal.ai** — images + video. Models in use: **Nano Banana Pro** (character portraits + composing two characters into one scene shot via `/edit`), **Kling v3 standard i2v** (dialogue SCENES: two characters talking to each other in our cloned voices), **Kling create-voice** (clone an ElevenLabs sample → reusable voice_id), **Seedance 1.5 Pro** (narration establishing motion), **FLUX dev** (anonymous silhouettes). The old one-avatar-per-line renderer (`talking_clips.py`: OmniHuman / Seedance+Sync / VEED / Kling Avatar) is kept for reference but NOT used by the scene pipeline.
+- **fal.ai** — images + video. Models in use: **Nano Banana Pro** (character portraits + composing two characters into one scene shot via `/edit`), **Kling v3 standard i2v** (dialogue SCENES: two characters talking to each other in our cloned voices), **Kling create-voice** (clone an ElevenLabs sample → reusable voice_id), **Seedance 1.5 Pro** (narration establishing motion), **FLUX dev** (anonymous silhouettes).
 - **ElevenLabs** (v3) — voices (cloned into Kling for the scenes; narrator voiceover directly).
 - **OpenAI gpt-4o-mini** — story analysis + scene script (cheap text model).
 - Avoid: Runway (too expensive). We moved from one-avatar-per-line to **Kling v3 scene generation** so the characters act and talk to each other like a real short film.
@@ -76,7 +76,6 @@ One command does everything: `python run.py "<story-url>"` → `output/final_vid
 - **SCENE pipeline (this branch):** `run.py` takes a link → a short-film video where characters act and talk to each other. ~$12–15 per ~75s video. Core pieces validated by proof clips; full end-to-end run pending.
 - `scene_writer.py` writes 5–7 SCENES (each dialogue scene ≤2 speaking characters). `voice_maker.py` clones each character's ElevenLabs voice into a Kling `voice_id` (create-voice) + makes narrator voiceover. `scene_clips.py` composes the characters into one shot (`nano-banana-pro/edit`) and animates it as a Kling v3 dialogue scene in the cloned voices; narration beats are Seedance motion + narrator VO. `assemble.py` joins the scenes.
 - Kling v3 standard cost tiers: $0.084/s (no audio), $0.126/s (audio), **$0.154/s (audio + our cloned voices)** — the tier we use. create-voice is a one-time clone per character.
-- The old one-avatar-per-line renderer lives in `talking_clips.py` (OmniHuman / Seedance+Sync / VEED / Kling Avatar) — kept for reference, not used here.
 
 ## Next steps (in order)
 1. Judge quality on a few videos; improve weak spots (script tone, voice fit, lip-sync).
