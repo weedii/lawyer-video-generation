@@ -46,6 +46,20 @@ SCENE_EDIT_MODEL = "fal-ai/nano-banana-pro/edit"      # compose chars into a sce
 SEEDANCE_MODEL = "fal-ai/bytedance/seedance/v1.5/pro/image-to-video"  # narration
 KLING_MIN_SEC, KLING_MAX_SEC = 5, 15
 
+# Negative prompt for the Kling dialogue clips: things we do NOT want. The big
+# one is the dead opening — Kling likes to hold the first frame with the
+# characters staring at the camera before they act. Naming it here (plus the
+# "start in motion" line in the positive prompt) cuts that lead-in down;
+# assemble.py trims whatever remains.
+KLING_NEG_PROMPT = (
+    "looking at camera, staring at the camera, talking to camera, addressing "
+    "the viewer, facing the camera, eye contact with camera, "
+    "static opening, frozen first frame, motionless pause at the start, "
+    "standing still doing nothing, waiting before speaking, idle, delayed "
+    "speech, slow to start, "
+    "blur, distort, low quality"   # keep the model's default quality guard too
+)
+
 
 def slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
@@ -147,7 +161,17 @@ def build_dialogue_prompt(scene: dict, chars_by_name: dict):
             marker[name] = ""   # no cloned voice -> Kling picks one
     desc = {n: descriptor(chars_by_name.get(n, {})) for n in scene.get("characters", [])}
 
-    parts = [scene.get("shot", "medium two-shot, slow dolly in"),
+    # Lead with a "start in motion" directive. Kling (like all image-to-video)
+    # tends to ease in from the still frame — the characters hold the opening
+    # pose, looking at the camera, for a beat before they move/talk. Putting this
+    # first (Kling weights early words most) pushes the action onto frame 1. It
+    # only REDUCES the stare; assemble.py still trims whatever's left.
+    parts = ["The scene is already in motion from the very first frame: the "
+             "characters are mid-conversation, moving and speaking immediately. "
+             "They look at and speak to EACH OTHER, facing one another like two "
+             "people in a private conversation — they NEVER look at or talk to "
+             "the camera, they are not addressing the viewer",
+             scene.get("shot", "medium two-shot, slow dolly in"),
              scene.get("action", "")]
     body = []
     for d in scene.get("dialogue", []):
@@ -168,6 +192,7 @@ def make_kling_scene(image_path: str, prompt: str, voice_ids: list,
     Returns the duration in seconds (for cost). Retries on transient fal errors."""
     image_url = fal_client.upload_file(image_path)
     args = {"image_url": image_url, "prompt": prompt,
+            "negative_prompt": KLING_NEG_PROMPT,
             "duration": duration, "generate_audio": True}
     if voice_ids:
         args["voice_ids"] = voice_ids     # our cloned per-character voices
@@ -243,62 +268,85 @@ def main():
     named = [c for c in data.get("characters", []) if not c.get("anonymous")]
     main_portraits = [os.path.join(OUT_DIR, c["file"]) for c in named[:2]
                       if c.get("file")]
+    main_names = [c["fictional_name"] for c in named[:2] if c.get("file")]
 
-    kling_seconds = 0.0
+    kling_voice_seconds = 0.0  # Kling dialogue billed with voice control ($0.154/s)
+    kling_plain_seconds = 0.0  # Kling dialogue with no cloned voice ($0.126/s)
     seedance_seconds = 0.0
-    scene_images = 0
+    scene_images = 0            # composed images we actually paid for
+    reused_images = 0          # times we reused an existing scene image (free)
+    # Reuse ONE composed image per (same cast + same place). We only compose a new
+    # image when the characters change (someone new walks in) or the location
+    # changes. This keeps the room consistent scene-to-scene AND saves a $0.15
+    # render each time two people just keep talking in the same spot.
+    scene_img_cache = {}       # (sorted character names, setting) -> image path
     print(f"Rendering {len(scenes)} scenes ...")
 
     for i, sc in enumerate(scenes, 1):
         clip_name = f"clip_{i:02d}.mp4"
         clip_path = os.path.join(OUT_DIR, clip_name)
-        img_path = os.path.join(OUT_DIR, f"scene_{i:02d}.png")
+        sc_setting = sc.get("setting", setting) or setting
+
+        # Who is IN this shot (narration = the main characters; dialogue = the
+        # scene's speakers), and their locked portraits.
+        if sc.get("type") == "narration":
+            names = main_names or [data["characters"][0]["fictional_name"]]
+        else:
+            names = [n for n in sc.get("characters", [])
+                     if chars_by_name.get(n, {}).get("file")]
+            if not names:
+                print(f"  [{i}] DIALOGUE skipped: no character images.")
+                continue
+        portraits = [os.path.join(OUT_DIR, chars_by_name[n]["file"])
+                     for n in names if chars_by_name.get(n, {}).get("file")]
+
+        # Same people + same place -> reuse the image; else compose a new one.
+        key = (tuple(sorted(names)), sc_setting.strip().lower())
+        img_path = scene_img_cache.get(key)
+        if img_path and os.path.exists(img_path):
+            reused_images += 1
+            print(f"  [{i}] reusing scene image for [{' + '.join(names)}] in {sc_setting}")
+        else:
+            img_path = os.path.join(OUT_DIR, f"scene_{i:02d}.png")
+            if compose_scene_image(portraits, sc_setting, sc.get("shot", ""),
+                                   sc.get("action", ""), img_path):
+                scene_images += 1
+                scene_img_cache[key] = img_path
 
         if sc.get("type") == "narration":
-            # Establishing shot (main characters in the setting) + narrator VO.
-            portraits = main_portraits or [
-                os.path.join(OUT_DIR, c["file"]) for c in data["characters"][:1]
-                if c.get("file")]
-            if compose_scene_image(portraits, setting, sc.get("shot", "wide establishing shot"),
-                                   sc.get("action", "the room, tense and quiet"), img_path):
-                scene_images += 1
+            # Animate the establishing image (silent) + lay the narrator VO over it.
             audio_path = os.path.join(OUT_DIR, sc.get("audio", ""))
             voice_len = audio_duration(audio_path) if os.path.exists(audio_path) else 6.0
             tmp = os.path.join(OUT_DIR, f"_motion_{i:02d}.mp4")
             secs = make_seedance_clip(
                 img_path, f"{sc.get('shot','')}. {sc.get('action','')}. "
-                          f"Slow cinematic motion, {setting}.", voice_len, tmp)
+                          f"Slow cinematic motion, {sc_setting}.", voice_len, tmp)
             seedance_seconds += secs
             overlay_voice(tmp, audio_path, clip_path)
             os.remove(tmp)
             print(f"  [{i}] NARRATION -> {clip_name} (Seedance {secs:.0f}s + narrator VO)")
         else:
-            # Dialogue scene: compose the speakers together, then Kling talks it.
-            portraits = [os.path.join(OUT_DIR, chars_by_name[n]["file"])
-                         for n in sc.get("characters", [])
-                         if chars_by_name.get(n, {}).get("file")]
-            if not portraits:
-                print(f"  [{i}] DIALOGUE skipped: no character images.")
-                continue
-            if compose_scene_image(portraits, sc.get("setting", setting),
-                                   sc.get("shot", "medium two-shot"),
-                                   sc.get("action", ""), img_path):
-                scene_images += 1
+            # Kling animates the scene image into a talking dialogue shot.
             prompt, voice_ids = build_dialogue_prompt(sc, chars_by_name)
             dur = scene_duration(sc)
             secs = make_kling_scene(img_path, prompt, voice_ids, dur, clip_path)
-            kling_seconds += secs
-            who = " + ".join(sc.get("characters", []))
-            print(f"  [{i}] DIALOGUE [{who}] -> {clip_name} (Kling {secs:.0f}s, "
-                  f"{len(voice_ids)} cloned voices)")
+            # Bill the right Kling tier: voice control if we passed cloned voices.
+            if voice_ids:
+                kling_voice_seconds += secs
+            else:
+                kling_plain_seconds += secs
+            print(f"  [{i}] DIALOGUE [{' + '.join(names)}] -> {clip_name} "
+                  f"(Kling {secs:.0f}s, {len(voice_ids)} cloned voices)")
 
         sc["clip"] = clip_name
 
     # --- Cost: Kling dialogue + Seedance narration + composed scene images ---
-    # Kling with cloned voices uses the "voice control" tier.
-    kling_cost = kling_seconds * costs.KLING_V3_STD_VOICE_PER_SEC
+    # Kling billed per tier: voice-control seconds ($0.154) vs plain-audio ($0.126).
+    kling_seconds = kling_voice_seconds + kling_plain_seconds
+    kling_cost = (kling_voice_seconds * costs.KLING_V3_STD_VOICE_PER_SEC
+                  + kling_plain_seconds * costs.KLING_V3_STD_AUDIO_PER_SEC)
     seedance_cost = seedance_seconds * costs.SEEDANCE_PRO_PER_SEC
-    image_cost = scene_images * costs.NANO_BANANA_PRO_PER_IMAGE
+    image_cost = scene_images * costs.NANO_BANANA_PRO_EDIT_PER_IMAGE
     clip_cost = kling_cost + seedance_cost + image_cost
     costs.record(data, "clips",
                  f"Scenes - Kling v3 dialogue ({kling_seconds:.0f}s) + Seedance "
@@ -308,7 +356,8 @@ def main():
     with open(analysis_path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-    print("\nUpdated output/analysis.json with the scene clips.")
+    print(f"\nUpdated output/analysis.json with the scene clips. "
+          f"({scene_images} images composed, {reused_images} reused)")
     costs.show(f"{len(scenes)} scenes (Kling {kling_seconds:.0f}s + "
                f"Seedance {seedance_seconds:.0f}s + {scene_images} images)", clip_cost)
 

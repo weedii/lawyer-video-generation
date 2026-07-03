@@ -24,6 +24,7 @@ Output: output/final_video.mp4
 Cost:   free (runs locally with ffmpeg).
 """
 import os
+import re
 import sys
 import json
 import subprocess
@@ -40,6 +41,34 @@ FPS = 25             # match the talking-model output (OmniHuman/Kling are 25fps
 ZOOM_AMOUNT = 0.06   # gentle 6% zoom over a clip; alternates in/out per clip
 SUPER_SCALE = 2      # render the zoom on a 2x frame so it stays smooth + sharp
 
+# --- Dead lead-in trim ------------------------------------------------------
+# Kling starts every dialogue clip with the characters just LOOKING at the
+# camera for 1-6s (silent, or only breathing / a shoe scuff) before they
+# actually speak. We cut that off by finding where real SPEECH starts.
+#
+# We can't use plain loudness: a loud breath or shoe scuff is as loud as quiet
+# speech. The reliable tell is that SPEECH lives in the voice band (300-3400Hz)
+# and is SUSTAINED, while breath/shoe are broadband thumps and brief. So we:
+#   1. band-pass to the voice range, then measure energy in 0.2s windows;
+#   2. learn THIS clip's own quiet floor (20th percentile) and speech peak;
+#   3. call it speech-onset at the first window that is above floor+margin AND
+#      stays up for ~0.8s (sustained) — a single breath/scuff spike can't
+#      trigger it;
+#   4. trim to just before that (a small pad keeps the first word safe).
+# Clips that open talking, or have no clear speech-vs-quiet gap (e.g. narration
+# voiceover), are left untouched.
+TRIM_HP = 300            # voice-band low edge (Hz)
+TRIM_LP = 3400           # voice-band high edge (Hz)
+TRIM_WIN = 0.2           # energy measured in windows this long (s)
+TRIM_FLOOR_PCTL = 0.2    # the clip's quiet floor = this percentile of window energies
+TRIM_MARGIN = 7.0        # speech must be this many dB above the floor
+TRIM_MIN_RANGE = 8.0     # if peak-floor is smaller than this, there's no clear speech -> don't trim
+TRIM_SUSTAIN_WIN = 4     # look at this many windows (4 x 0.2s = 0.8s) ...
+TRIM_SUSTAIN_NEED = 3    # ... and require this many above threshold = "sustained"
+TRIM_OPEN_T = 0.4        # if speech starts within this, the clip opens talking -> don't trim
+TRIM_PAD = 0.25          # keep this much before the first word (safety)
+TRIM_MAX_FRAC = 0.6      # never cut more than this fraction of a clip (runaway guard)
+
 
 def run(cmd: list[str]):
     """Run an ffmpeg command and stop on error."""
@@ -54,6 +83,52 @@ def audio_duration(path: str) -> float:
         check=True, capture_output=True, text=True).stdout.strip())
 
 
+def voice_energy_track(path: str) -> list[tuple[float, float]]:
+    """Voice-band energy of a clip in TRIM_WIN-second windows, as (time, dB).
+
+    Band-passes to the speech range, then reads astats' per-window RMS level.
+    Used to find where speech starts (see speech_onset)."""
+    n = int(44100 * TRIM_WIN)
+    af = (f"aresample=44100,highpass=f={TRIM_HP},lowpass=f={TRIM_LP},"
+          f"asetnsamples=n={n},astats=metadata=1:reset=1,"
+          f"ametadata=mode=print:key=lavfi.astats.Overall.RMS_level")
+    out = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-i", path, "-af", af, "-f", "null", "-"],
+        capture_output=True, text=True).stderr
+    times = [float(x) for x in re.findall(r"pts_time:([\d.]+)", out)]
+    rms = [float(x) for x in re.findall(r"RMS_level=(-?[\d.]+)", out)]
+    m = min(len(times), len(rms))
+    return list(zip(times[:m], rms[:m]))
+
+
+def speech_onset(path: str) -> float:
+    """Seconds of dead lead-in to cut from the FRONT of a clip.
+
+    Finds the first SUSTAINED voice-band speech, learning this clip's own quiet
+    floor so it works whether the lead-in is silent or full of breath/shoe
+    noise. Returns 0 (no trim) for clips that open talking or have no clear
+    speech-vs-quiet gap. See the TRIM_* constants for the full method."""
+    track = voice_energy_track(path)
+    if len(track) < 5:
+        return 0.0
+    vals = sorted(v for _, v in track)
+    floor = vals[int(len(vals) * TRIM_FLOOR_PCTL)]
+    peak = vals[-1]
+    if peak - floor < TRIM_MIN_RANGE:        # no clear speech vs quiet -> leave alone
+        return 0.0
+    thr = floor + TRIM_MARGIN
+    for i, (t, v) in enumerate(track):
+        if v < thr:
+            continue
+        window = [x[1] for x in track[i:i + TRIM_SUSTAIN_WIN]]
+        if sum(1 for x in window if x >= thr) >= TRIM_SUSTAIN_NEED:
+            if t <= TRIM_OPEN_T:             # opens talking -> don't trim
+                return 0.0
+            total = audio_duration(path)
+            return max(0.0, min(t - TRIM_PAD, total * TRIM_MAX_FRAC))
+    return 0.0
+
+
 def video_dims(path: str) -> tuple[int, int]:
     """Return (width, height) of a video."""
     out = subprocess.run(
@@ -65,7 +140,8 @@ def video_dims(path: str) -> tuple[int, int]:
 
 
 def normalise(in_path: str, out_path: str, dur: float, w: int, h: int,
-              zoom_in: bool = True, is_first: bool = False, is_last: bool = False):
+              zoom_in: bool = True, is_first: bool = False, is_last: bool = False,
+              start: float = 0.0):
     """Re-encode one clip to the common size/fps/quality so the clips join
     cleanly WITHOUT losing quality, applying a gentle smooth zoom.
     - High quality (crf 16) so re-encoding barely touches the picture.
@@ -101,8 +177,11 @@ def normalise(in_path: str, out_path: str, dur: float, w: int, h: int,
     af = (f"afade=t=in:st=0:d={a_in},"
           f"afade=t=out:st={max(dur - a_out, 0):.3f}:d={a_out}")
 
+    # -ss BEFORE -i seeks past the dead lead-in; with re-encoding it is
+    # frame-accurate. Both audio and video are seeked together, so lip-sync is
+    # preserved. -t then bounds the (already trimmed) length.
     run([
-        "ffmpeg", "-y", "-i", in_path,
+        "ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", in_path,
         "-t", f"{dur:.3f}",
         "-vf", vf, "-af", af,
         "-r", str(FPS),
@@ -138,17 +217,21 @@ def main():
         in_path = os.path.join(OUT_DIR, sc["clip"])
         out_path = os.path.join(OUT_DIR, f"_norm_{i:02d}.mp4")
 
-        # Scene clips are already the right length: Kling renders the requested
-        # duration and the narration clips are pre-trimmed to the voiceover. So we
-        # keep each clip's full length (no trimming that could chop a last word).
-        dur = audio_duration(in_path)
+        # Cut the dead "staring at camera" lead-in Kling puts on dialogue clips
+        # (adaptive; leaves narration / already-talking clips untouched). Then
+        # keep the rest of the clip's full length (no tail trim that could chop a
+        # last word).
+        full = audio_duration(in_path)
+        start = speech_onset(in_path)
+        dur = full - start
 
         # Alternate the zoom direction so the video breathes in and out.
         zoom_in = (i % 2 == 1)
         normalise(in_path, out_path, dur, target_w, target_h, zoom_in=zoom_in,
-                  is_first=(i == 1), is_last=(i == len(clips)))
+                  is_first=(i == 1), is_last=(i == len(clips)), start=start)
         normalised.append(out_path)
-        print(f"  [{i}] prepared {sc['clip']} -> {dur:.2f}s ({'zoom in' if zoom_in else 'zoom out'})")
+        trim_note = f", cut {start:.2f}s lead-in" if start > 0.05 else ""
+        print(f"  [{i}] prepared {sc['clip']} -> {dur:.2f}s ({'zoom in' if zoom_in else 'zoom out'}{trim_note})")
 
     # 2) Join them all in order (hard cuts).
     list_file = os.path.join(OUT_DIR, "_concat.txt")

@@ -32,6 +32,11 @@ OUR_IMAGE_MEGAPIXELS = 1
 # is the standard rate ($0.15). 4K would be double; we don't use 4K.
 NANO_BANANA_PRO_PER_IMAGE = 0.15
 
+# Nano Banana Pro EDIT (compose 2 characters into one scene shot): same flat
+# per-image price as generate at 2K. Used by scene_clips.py.
+#     fal.ai/models/fal-ai/nano-banana-pro/edit
+NANO_BANANA_PRO_EDIT_PER_IMAGE = 0.15
+
 # FLUX.1 [dev]: $0.025/MP -> $0.025 per image at our size. Used for the
 # establishing shot and (currently) the anonymous silhouettes.
 FLUX_DEV_PER_IMAGE = 0.025
@@ -90,10 +95,10 @@ KLING_V3_STD_AUDIO_PER_SEC = 0.126
 KLING_V3_STD_VOICE_PER_SEC = 0.154
 
 # Kling create-voice: clone one ElevenLabs sample -> a reusable voice_id. Done
-# ONCE per character (reused in every scene), not per clip. fal did not surface a
-# per-call charge in testing; treated as ~free here — update if it starts billing.
+# ONCE per character (reused in every scene), not per clip. VERIFIED $0.007 per
+# call on the fal page, and confirmed by the response header x-fal-billable-units:1.
 #     fal.ai/models/fal-ai/kling-video/create-voice
-KLING_CREATE_VOICE_PER = 0.0
+KLING_CREATE_VOICE_PER = 0.007
 
 # Sync lipsync (fal-ai/sync-lipsync): takes a VIDEO + our voice and redoes the
 # MOUTH to match. We run it AFTER Seedance so a moving clip (character stands up,

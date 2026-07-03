@@ -54,10 +54,14 @@ if __name__ == "__main__":
     print("Final video:      output/final_video.mp4", flush=True)
     print("Read everything:  output/analysis.md", flush=True)
 
-    # Print the whole cost of this video: each step recorded its real cost into
-    # analysis.json as it ran; here we total it and show the breakdown.
-    try:
-        with open(os.path.join("output", "analysis.json")) as f:
-            costs.print_summary(json.load(f))
-    except Exception as e:
-        print(f"(could not print cost summary: {e})", flush=True)
+    # Cost of this video. When the API spy is on (COSTLOG=1), print the REAL cost
+    # computed from the ACTUAL billed units in output/api_calls.jsonl (no
+    # estimation). Otherwise fall back to the per-step estimate in analysis.json.
+    if os.environ.get("COSTLOG"):
+        subprocess.run([sys.executable, "reconcile.py"])
+    else:
+        try:
+            with open(os.path.join("output", "analysis.json")) as f:
+                costs.print_summary(json.load(f))
+        except Exception as e:
+            print(f"(could not print cost summary: {e})", flush=True)
