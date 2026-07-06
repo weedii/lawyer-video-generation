@@ -68,6 +68,12 @@ TRIM_SUSTAIN_NEED = 3    # ... and require this many above threshold = "sustaine
 TRIM_OPEN_T = 0.4        # if speech starts within this, the clip opens talking -> don't trim
 TRIM_PAD = 0.25          # keep this much before the first word (safety)
 TRIM_MAX_FRAC = 0.6      # never cut more than this fraction of a clip (runaway guard)
+# After we find the SUSTAINED speech, a SHORT first word (e.g. "No.") can sit just
+# before it, separated by a brief pause. We walk back to include it so it isn't
+# chopped. Only across a SMALL pause (a real first word stays close to the rest;
+# a longer gap means the earlier sound was junk we should keep cutting).
+TRIM_BACK_GAP = 2        # allow this many quiet windows (x0.2s) between first word and main speech
+TRIM_BACK_MAX = 1.2      # never reach back more than this many seconds (safety)
 
 
 def run(cmd: list[str]):
@@ -122,10 +128,24 @@ def speech_onset(path: str) -> float:
             continue
         window = [x[1] for x in track[i:i + TRIM_SUSTAIN_WIN]]
         if sum(1 for x in window if x >= thr) >= TRIM_SUSTAIN_NEED:
-            if t <= TRIM_OPEN_T:             # opens talking -> don't trim
+            # Found sustained speech at index i. Walk BACK to catch a short first
+            # word sitting just before it (across only a brief pause), so we cut
+            # to the true start of talking and never chop that first word.
+            onset_i = i
+            j, gap = i - 1, 0
+            while j >= 0 and (track[i][0] - track[j][0]) <= TRIM_BACK_MAX:
+                if track[j][1] >= thr:        # an earlier speech window = first word
+                    onset_i, gap = j, 0
+                else:
+                    gap += 1
+                    if gap > TRIM_BACK_GAP:   # too much quiet before -> real start found
+                        break
+                j -= 1
+            t0 = track[onset_i][0]
+            if t0 <= TRIM_OPEN_T:             # opens talking -> don't trim
                 return 0.0
             total = audio_duration(path)
-            return max(0.0, min(t - TRIM_PAD, total * TRIM_MAX_FRAC))
+            return max(0.0, min(t0 - TRIM_PAD, total * TRIM_MAX_FRAC))
     return 0.0
 
 

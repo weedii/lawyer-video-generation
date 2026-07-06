@@ -47,16 +47,30 @@ in the same room, like real actors. This is NOT one person talking to camera.
 Speakers:
 - Use ONLY the given characters for dialogue. Write each "character" field EXACTLY
   as the name given in the cast — copy the name only, never add extra words.
-- Some characters are marked "anonymous" inside their description — real but
-  unnamed people (e.g. a junior colleague). You MAY use them as speakers.
+- Some characters are marked "anonymous" inside their description — real people the
+  article does not name (e.g. a junior colleague). They are FULL actors with a real
+  face, shown by their role; use them as speakers freely, exactly like the named
+  ones.
+- Use as MANY of the cast as the story needs across the scenes — there is NO limit
+  on how many characters appear in the video (a story may be one lead plus several
+  others). The only limit is per scene (two speakers), never on the whole cast.
 - Also use a "Narrator" for the opening hook and closing cliffhanger (voiceover).
+
+INTRODUCE NEW FACES (so the viewer is never confused):
+- The FIRST time a character appears who wasn't in an earlier scene, make it clear
+  who they are — either the narrator names their role in the scene just before
+  (e.g. "Her junior associate had been watching the whole time."), or the dialogue
+  itself makes the relationship obvious in the first line. Never drop a brand-new
+  face into a scene with no context.
 
 STRUCTURE (a real beginning, middle and end) — 5 to 7 SCENES total:
 1. OPEN with exactly one NARRATION scene (beat "intro"): a punchy one-sentence
    voiceover hook that sets up the scandal.
 2. MIDDLE: 3 to 5 DIALOGUE scenes that DRAMATIZE THE REAL EVENTS, building through
    the beats "setup" -> "escalation" -> "twist". Each scene is two characters
-   confronting each other in one place.
+   confronting each other in one place. OPTIONAL: when a new character enters the
+   story mid-way, you MAY put ONE short NARRATION scene (beat "bridge") right
+   before their first scene to introduce them in a single voiceover sentence.
 3. CLOSE with exactly one NARRATION scene (beat "cliffhanger"): a strong button.
 
 HARD RULES:
@@ -71,6 +85,12 @@ HARD RULES:
 - Keep the legal jargon (injunction, struck off, tribunal, inquest, rights of
   audience, etc.) and do NOT explain it.
 - Set every scene in the REAL location where the drama happened.
+- CONTINUITY OF ACTION: write each scene's action to CONTINUE from where the
+  previous scene ended — do NOT restart the blocking. If two scenes in a row have
+  the same people in the same place, and someone stood up / moved / picked up a
+  file at the end of the first, the next scene ASSUMES that already happened (e.g.
+  "now on her feet, she paces" — NOT "she stands up" again). Never repeat the same
+  physical move in consecutive scenes; the video is one flowing story, not a loop.
 
 FOR EACH SCENE also give:
 - "shot": a cinematic shot + camera direction (e.g. "medium two-shot, slow dolly

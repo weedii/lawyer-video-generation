@@ -53,31 +53,36 @@ HARD RULE — FICTIONALIZE EVERY NAME:
 - Keep everything else true to the article: the events, the legal details, the
   jargon, the drama. Only the names change.
 
-ANONYMOUS PEOPLE (very important):
+HOW MANY CHARACTERS:
+- Include EVERY person who matters to the story — no maximum. A story might have
+  one main character and several others, or many people. Include them all. Do
+  NOT drop or merge people to hit some small number.
+- Do NOT invent a separate character for pure background extras (a random judge
+  on the bench, courtroom crowd, a receptionist who never matters). Those are
+  just painted into the scene later; they are not characters.
+
+HIDDEN-IDENTITY PEOPLE (people the article does not name):
 - Some people in the article are NOT named — they appear only as "the women",
   "a junior colleague", "the complainant", "a witness", "Person A", or initials.
   Real legal cases hide victims/witnesses this way.
-- INCLUDE these people as characters too (they speak in the scene), but:
-    * set "anonymous": true,
-    * in "role", put a SHORT, clear job title (1-3 words) for their part in the
-      story — e.g. "Junior Associate", "Trainee Solicitor", "Paralegal", "Legal
-      Secretary", "Witness", "Complainant". We show anonymous people on screen
-      BY THIS ROLE (not by a name), so each anonymous person's role MUST be
-      DISTINCT — never repeat the same role.
-    * do NOT describe a face for them — on screen they are a shadowy,
-      unidentifiable silhouette with this role written on it.
-    * set "gender" if the article reveals it (e.g. "junior female colleagues"
-      -> female), otherwise "unknown".
-    * leave "appearance" and "image_prompt" as empty strings "".
-    * "fictional_name" is ignored for anonymous people (we replace it with the
-      role), so don't worry about it.
-- A NAMED person is "anonymous": false and gets the FULL treatment below
-  (invented name, detailed appearance, image_prompt).
+- INCLUDE these people as FULL characters — they are real actors on screen, NOT
+  shadows. They get a real, detailed face and stay consistent scene to scene,
+  exactly like the named characters. The ONLY difference is they have no real
+  name, so we refer to them by their role. For them:
+    * set "anonymous": true  (this only means "refer to them by role, not a real name"),
+    * in "role", put a SHORT, clear job title (1-3 words) — e.g. "Junior
+      Associate", "Trainee Solicitor", "Paralegal", "Witness", "Complainant".
+      Each such role MUST be DISTINCT — never repeat the same role.
+    * still write a VERY DETAILED "appearance" and a full "image_prompt" for
+      them, just like everyone else, so they get a real consistent face.
+    * set "gender" if the article reveals it, otherwise choose a plausible one.
+    * "fictional_name" is ignored for these people (we show the role instead).
+- A NAMED person is "anonymous": false and gets an invented name.
 
-For EACH character, write rich, detailed sections, all inferred from the story
-and their role (make sensible, authentic choices where the article is silent).
-For anonymous characters, only "fictional_name", "role" and "gender" matter —
-keep "appearance" and "image_prompt" empty.
+For EACH character (named OR hidden-identity), write rich, detailed sections,
+all inferred from the story and their role (make sensible, authentic choices
+where the article is silent). EVERY character must have a full "appearance" and
+"image_prompt" — never leave them empty.
 
 Return ONLY valid JSON with exactly this shape:
 {
@@ -91,8 +96,8 @@ Return ONLY valid JSON with exactly this shape:
       "anonymous": false,
       "gender": "male, female, or unknown",
       "personality": "VERY DETAILED paragraph: their character, temperament, motivations, how they behave under pressure, flaws and strengths — all justified by the story and their role.",
-      "appearance": "VERY DETAILED physical description for image generation: age, gender, ethnicity, face shape, skin, eyes, eyebrows, nose, mouth, hair style and colour, facial hair, body build, posture, typical clothing, and any distinguishing features. Make the look fit their personality and role. (Empty string if anonymous.)",
-      "image_prompt": "ONE clean prompt that combines the look into a single line, cinematic Suits/Billions TV-drama style, photorealistic, professional vertical portrait. No real names. (Empty string if anonymous.)"
+      "appearance": "VERY DETAILED physical description for image generation: age, gender, ethnicity, face shape, skin, eyes, eyebrows, nose, mouth, hair style and colour, facial hair, body build, posture, typical clothing, and any distinguishing features. Make the look fit their personality and role. REQUIRED for every character (named or hidden-identity).",
+      "image_prompt": "ONE clean prompt that combines the look into a single line, cinematic Suits/Billions TV-drama style, photorealistic, professional vertical portrait. No real names. REQUIRED for every character (named or hidden-identity)."
     }
   ]
 }
@@ -239,13 +244,10 @@ def write_markdown(data: dict, path: str):
 
     lines.append("## Characters")
     for c in data.get("characters", []):
-        # Anonymous people (Person A/B) are shown on screen as a silhouette,
-        # so flag them here instead of printing empty appearance fields.
-        if c.get("anonymous"):
-            lines.append(f"\n### {c['fictional_name']} — {c['role']} _(anonymous — silhouette)_")
-            lines.append(f"\n**Personality:** {c.get('personality', '')}")
-            continue
-        lines.append(f"\n### {c['fictional_name']} — {c['role']}")
+        # Hidden-identity people have a real face too now; they are just shown by
+        # role instead of a real name. Flag that, then print the full sections.
+        tag = " _(shown by role)_" if c.get("anonymous") else ""
+        lines.append(f"\n### {c['fictional_name']} — {c['role']}{tag}")
         lines.append(f"\n**Personality:** {c.get('personality', '')}")
         lines.append(f"\n**Appearance:** {c.get('appearance', '')}")
         lines.append(f"\n**Image prompt:** {c.get('image_prompt', '')}")

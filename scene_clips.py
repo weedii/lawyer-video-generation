@@ -57,6 +57,12 @@ KLING_NEG_PROMPT = (
     "static opening, frozen first frame, motionless pause at the start, "
     "standing still doing nothing, waiting before speaking, idle, delayed "
     "speech, slow to start, "
+    # Kling also likes to invent a garbled filler sound at the very start (the
+    # wrong character mumbling something meaningless before the real line) — an
+    # audio version of the dead lead-in. Name it so it happens less.
+    "mumbling, muttering, garbled speech, gibberish, nonsense words, "
+    "unintelligible talking, the wrong character speaking first, "
+    "background chatter, lip movement with no clear words, "
     "blur, distort, low quality"   # keep the model's default quality guard too
 )
 
@@ -100,21 +106,45 @@ def descriptor(c: dict) -> str:
 # --- Scene image: put the characters together in the setting ---------------
 
 def compose_scene_image(portrait_paths: list, setting: str, shot: str,
-                        action: str, out_path: str) -> bool:
+                        action: str, out_path: str, room_ref: str = None) -> bool:
     """Compose the given character portraits into ONE upright vertical scene image
     (Nano Banana Pro edit). Keeps their exact faces. Returns True on success.
 
     Composed VERTICALLY (people in front, room rising behind/above) so the model
-    does not rotate a wide layout sideways — the same lesson as make_scene_image."""
+    does not rotate a wide layout sideways — the same lesson as make_scene_image.
+
+    Used for the FIRST shot of a set of people (and for cast/location changes).
+    Clip-to-clip continuity is NOT done here — Nano recomposes a new pose and
+    loses it; the main loop instead feeds the previous clip's last frame straight
+    to Kling for continuation clips.
+
+    room_ref: an existing scene image of the SAME location (used when the cast
+    changed). Keeps the room identical while placing the new people in it, so a
+    later shot in the same place doesn't look like a different building."""
     urls = [fal_client.upload_file(p) for p in portrait_paths]
-    prompt = (
-        f"Put these people together in ONE cinematic shot inside {setting}. "
-        f"{action}. Keep their exact faces and clothing. {shot}. Vertical 9:16 "
-        f"portrait, upright: the people stand/sit in the foreground with heads "
-        f"near the TOP of the frame, the room rising behind and above them. Moody "
-        f"cinematic prestige legal-drama lighting, photorealistic. NOT rotated, "
-        f"NOT sideways, NOT landscape."
-    )
+    n = len(urls)
+    if room_ref and os.path.exists(room_ref):
+        urls.append(fal_client.upload_file(room_ref))   # room reference goes LAST
+        prompt = (
+            f"The first {n} image(s) are people; the LAST image is a room. Place "
+            f"those people together inside the SAME room shown in the last image — "
+            f"keep that room's EXACT architecture, windows, wood panelling, "
+            f"furniture, lighting and colour so it is unmistakably the identical "
+            f"location. {action}. Keep each person's exact face and clothing. "
+            f"{shot}. Vertical 9:16 portrait, upright: the people stand/sit in the "
+            f"foreground with heads near the TOP of the frame, the room rising "
+            f"behind and above them. Photorealistic. NOT rotated, NOT sideways, "
+            f"NOT landscape."
+        )
+    else:
+        prompt = (
+            f"Put these people together in ONE cinematic shot inside {setting}. "
+            f"{action}. Keep their exact faces and clothing. {shot}. Vertical 9:16 "
+            f"portrait, upright: the people stand/sit in the foreground with heads "
+            f"near the TOP of the frame, the room rising behind and above them. Moody "
+            f"cinematic prestige legal-drama lighting, photorealistic. NOT rotated, "
+            f"NOT sideways, NOT landscape."
+        )
     for attempt in range(1, 3):
         p = prompt if attempt == 1 else prompt + " CRITICAL: upright vertical frame."
         try:
@@ -250,6 +280,24 @@ def overlay_voice(video_path: str, audio_path: str, out_path: str):
     ], check=True, capture_output=True)
 
 
+def extract_last_frame(clip_path: str, out_path: str) -> bool:
+    """Save a still of a clip's ENDING as a PNG, for scene continuity.
+
+    We grab ~0.2s before the very end (not the literal last frame, which can be
+    motion-blurred or half-decoded) so we get a clean picture of where the
+    characters ended up. The next clip of the same scene composes from this so
+    the action continues instead of restarting. Free (local ffmpeg)."""
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-sseof", "-0.2", "-i", clip_path,
+            "-update", "1", "-frames:v", "1", "-q:v", "2", out_path,
+        ], check=True, capture_output=True)
+        return os.path.exists(out_path)
+    except Exception as e:
+        print(f"    (could not grab last frame for continuity: {e})")
+        return False
+
+
 def main():
     analysis_path = os.path.join(OUT_DIR, "analysis.json")
     if not os.path.exists(analysis_path):
@@ -274,12 +322,17 @@ def main():
     kling_plain_seconds = 0.0  # Kling dialogue with no cloned voice ($0.126/s)
     seedance_seconds = 0.0
     scene_images = 0            # composed images we actually paid for
-    reused_images = 0          # times we reused an existing scene image (free)
-    # Reuse ONE composed image per (same cast + same place). We only compose a new
-    # image when the characters change (someone new walks in) or the location
-    # changes. This keeps the room consistent scene-to-scene AND saves a $0.15
-    # render each time two people just keep talking in the same spot.
-    scene_img_cache = {}       # (sorted character names, setting) -> image path
+    # SCENE CONTINUITY. The FIRST time a set of people appears in a place we
+    # compose a portrait-anchored scene image. For the NEXT clip of the same
+    # people in the same place, we start Kling STRAIGHT from the previous clip's
+    # last frame (no recompose) so the action carries forward — someone who stood
+    # up stays standing — instead of resetting and replaying. The faces in that
+    # frame are already correct, so continuity costs nothing and doesn't drift.
+    continuity_frame = {}      # (sorted names, setting) -> previous clip's last-frame PNG
+    # When the CAST changes but the LOCATION is the same, there's no continuity to
+    # carry, so we anchor to the first image shot in that location instead, so the
+    # room stays identical rather than the model inventing a different courtroom.
+    location_ref = {}          # setting (location only) -> first image made there
     print(f"Rendering {len(scenes)} scenes ...")
 
     for i, sc in enumerate(scenes, 1):
@@ -300,18 +353,35 @@ def main():
         portraits = [os.path.join(OUT_DIR, chars_by_name[n]["file"])
                      for n in names if chars_by_name.get(n, {}).get("file")]
 
-        # Same people + same place -> reuse the image; else compose a new one.
-        key = (tuple(sorted(names)), sc_setting.strip().lower())
-        img_path = scene_img_cache.get(key)
-        if img_path and os.path.exists(img_path):
-            reused_images += 1
-            print(f"  [{i}] reusing scene image for [{' + '.join(names)}] in {sc_setting}")
+        # Choose this clip's START IMAGE.
+        loc_key = sc_setting.strip().lower()
+        key = (tuple(sorted(names)), loc_key)
+        cont_ref = continuity_frame.get(key) if sc.get("type") != "narration" else None
+
+        if cont_ref:
+            # CONTINUE the shot: start this clip STRAIGHT from the previous clip's
+            # last frame (no Nano recompose). Nano is a composer — given the
+            # portraits it rebuilds a brand-new pose/framing and throws the
+            # continuity away (we saw it do exactly that). Feeding the real last
+            # frame straight to Kling is the only thing that actually continues
+            # the action. The faces in that frame are already correct (the first
+            # clip of this pair was portrait-anchored), so continuity is free.
+            img_path = cont_ref
+            print(f"  [{i}] [{' + '.join(names)}] continues straight from the "
+                  f"previous clip's last frame")
         else:
+            # First time these people appear here (or the cast/location changed):
+            # compose a fresh portrait-anchored scene image. If we've already shot
+            # this room, anchor to it so it stays the identical location.
             img_path = os.path.join(OUT_DIR, f"scene_{i:02d}.png")
+            room_ref = location_ref.get(loc_key)
+            if room_ref:
+                print(f"  [{i}] composing [{' + '.join(names)}] in {sc_setting} "
+                      f"(anchored to the established room)")
             if compose_scene_image(portraits, sc_setting, sc.get("shot", ""),
-                                   sc.get("action", ""), img_path):
+                                   sc.get("action", ""), img_path, room_ref=room_ref):
                 scene_images += 1
-                scene_img_cache[key] = img_path
+                location_ref.setdefault(loc_key, img_path)   # first shot here = the room anchor
 
         if sc.get("type") == "narration":
             # Animate the establishing image (silent) + lay the narrator VO over it.
@@ -335,6 +405,11 @@ def main():
                 kling_voice_seconds += secs
             else:
                 kling_plain_seconds += secs
+            # Remember where this clip ENDED, so the next clip of the same scene
+            # (same people, same place) continues from here instead of resetting.
+            end_frame = os.path.join(OUT_DIR, f"_end_{i:02d}.png")
+            if extract_last_frame(clip_path, end_frame):
+                continuity_frame[key] = end_frame
             print(f"  [{i}] DIALOGUE [{' + '.join(names)}] -> {clip_name} "
                   f"(Kling {secs:.0f}s, {len(voice_ids)} cloned voices)")
 
@@ -357,7 +432,7 @@ def main():
         json.dump(data, f, indent=2, ensure_ascii=False)
 
     print(f"\nUpdated output/analysis.json with the scene clips. "
-          f"({scene_images} images composed, {reused_images} reused)")
+          f"({scene_images} scene images composed, continuity-chained)")
     costs.show(f"{len(scenes)} scenes (Kling {kling_seconds:.0f}s + "
                f"Seedance {seedance_seconds:.0f}s + {scene_images} images)", clip_cost)
 
