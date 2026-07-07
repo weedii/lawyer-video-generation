@@ -28,9 +28,9 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 | Step | Script | What it does | Model | Cost |
 |------|--------|--------------|-------|------|
 | 1 | `scrape.py <url>` | Download story + comments | — | free |
-| 2 | `analyze.py` | Organize + invent fictional characters | OpenAI gpt-4o-mini | ~$0.001 |
+| 2 | `analyze.py` | Organize + invent fictional characters | OpenAI GPT-4.1 | ~$0.03 |
 | 3 | `gen_characters.py` | One locked vertical portrait per character (used as scene reference) | fal.ai Nano Banana Pro (2K) | $0.15 each |
-| 4 | `scene_writer.py` | Write the SCENE script (5–7 scenes; each dialogue scene = 2 characters in one room) | OpenAI gpt-4o-mini | ~$0.001 |
+| 4 | `scene_writer.py` | Write the SCENE script (5–7 scenes; each dialogue scene = 2 characters in one room) | OpenAI GPT-4.1 | ~$0.04 |
 | 5 | `voice_maker.py` | Clone each character's ElevenLabs voice into a reusable Kling voice_id + narrator voiceover | ElevenLabs + Kling create-voice | by characters |
 | 6 | `scene_clips.py` | Per scene: compose the characters into one shot, then animate it as a talking dialogue scene in our cloned voices | Nano Banana Pro (compose) + Kling v3 (dialogue) + Seedance (narration) | ~$0.15/sec dialogue |
 | 7 | `assemble.py` | Join the scenes into the final video | ffmpeg (local) | free |
@@ -104,7 +104,7 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 
 ## Costs (estimates from provider pricing)
 - Scrape: free
-- Analyze + scene script (OpenAI gpt-4o-mini): ~$0.002 per story
+- Analyze + scene script (OpenAI GPT-4.1): ~$0.07 per story
 - Character portrait (Nano Banana Pro, 2K): $0.15 each
 - Voice (ElevenLabs v3) + one Kling voice clone per character: by characters (clone reused every scene)
 - Composed scene image (Nano Banana Pro): $0.15 per scene

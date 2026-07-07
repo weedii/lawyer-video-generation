@@ -3,8 +3,9 @@
 You give it a story link. It runs the other scripts in order:
     1. scrape.py          -> download the story
     2. analyze.py         -> organize it + invent characters
-    3. gen_characters.py  -> make one locked portrait per character
-    4. scene_writer.py    -> write the SCENE script (who is in each scene + dialogue)
+    3. scene_writer.py    -> write the SCENE script (who is in each scene + dialogue)
+    4. gen_characters.py  -> make one locked portrait per USED character (only the
+                             characters the script actually uses, to skip wasted renders)
     5. voice_maker.py     -> clone each character's voice + narrator voiceover
     6. scene_clips.py     -> render one cinematic SCENE clip per beat (Kling)
     7. assemble.py        -> join the scenes into the final video
@@ -42,8 +43,10 @@ if __name__ == "__main__":
     # The steps, in order. scrape needs the link; the others read files.
     step("STEP 1/7", "Scrape the story", ["scrape.py", url])
     step("STEP 2/7", "Analyze story + invent characters", ["analyze.py"])
-    step("STEP 3/7", "Make a locked portrait for each character", ["gen_characters.py"])
-    step("STEP 4/7", "Write the scene script", ["scene_writer.py"])
+    # Write the script BEFORE drawing faces, so we only pay to draw the characters
+    # the script actually uses (analyze often invents extras the story never needs).
+    step("STEP 3/7", "Write the scene script", ["scene_writer.py"])
+    step("STEP 4/7", "Make a locked portrait for each USED character", ["gen_characters.py"])
     step("STEP 5/7", "Clone character voices + narrator voiceover", ["voice_maker.py"])
     step("STEP 6/7", "Render one cinematic scene clip per beat", ["scene_clips.py"])
     step("STEP 7/7", "Join the scenes into the final video", ["assemble.py"])

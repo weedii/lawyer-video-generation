@@ -26,9 +26,10 @@ KEY = os.getenv("OPENAI_API_KEY")
 if not KEY:
     sys.exit("ERROR: OPENAI_API_KEY is empty. Paste your OpenAI key in .env.")
 
-# A very cheap, good-enough text model.
-# (If you have access, "gpt-4.1-nano" is even cheaper — just change this line.)
-MODEL = "gpt-4o-mini"
+# Text model for story analysis + inventing characters. GPT-4.1 (not the cheap
+# mini): it invents better, more distinct characters and follows the rules —
+# gpt-4o-mini was too dumb and kept breaking things. Still pennies per video.
+MODEL = "gpt-4.1"
 
 OUT_DIR = "output"
 
@@ -67,16 +68,17 @@ HIDDEN-IDENTITY PEOPLE (people the article does not name):
   Real legal cases hide victims/witnesses this way.
 - INCLUDE these people as FULL characters — they are real actors on screen, NOT
   shadows. They get a real, detailed face and stay consistent scene to scene,
-  exactly like the named characters. The ONLY difference is they have no real
-  name, so we refer to them by their role. For them:
-    * set "anonymous": true  (this only means "refer to them by role, not a real name"),
+  exactly like the named characters. The ONLY difference is they are referred to
+  by their ROLE, not a personal name. For them:
+    * set "anonymous": true,
     * in "role", put a SHORT, clear job title (1-3 words) — e.g. "Junior
       Associate", "Trainee Solicitor", "Paralegal", "Witness", "Complainant".
       Each such role MUST be DISTINCT — never repeat the same role.
     * still write a VERY DETAILED "appearance" and a full "image_prompt" for
       them, just like everyone else, so they get a real consistent face.
     * set "gender" if the article reveals it, otherwise choose a plausible one.
-    * "fictional_name" is ignored for these people (we show the role instead).
+    * "fictional_name" is ignored for them — the pipeline replaces it with the
+      role, and the script uses that role as their name.
 - A NAMED person is "anonymous": false and gets an invented name.
 
 For EACH character (named OR hidden-identity), write rich, detailed sections,
@@ -131,11 +133,12 @@ def find_real_names(client, story: dict) -> tuple[list[str], float]:
 
 
 def label_anonymous_by_role(result: dict) -> dict:
-    """Anonymous people should be shown by their ROLE, not a personal name.
-    The model reliably fills 'role' (e.g. "Junior Associate") but always sticks a
-    name in 'fictional_name' anyway — so here we just overwrite their name with
-    their role. We keep each label unique (add ' 2', ' 3' if a role repeats),
-    because the rest of the pipeline uses the name as the character's id."""
+    """Hidden-identity people are shown by their ROLE, not a personal name (they
+    still get a real face — only the NAME is the role). The model fills 'role'
+    (e.g. "Junior Associate") but sticks a name in 'fictional_name' anyway, so
+    here we overwrite their name with the role. The rest of the pipeline uses the
+    name as the character's id, and scene_writer must copy it EXACTLY — so this
+    role becomes the character's one true name everywhere (kept unique)."""
     used = set()
     # Reserve the real characters' names first so an anonymous role can't clash.
     for c in result.get("characters", []):
@@ -216,8 +219,9 @@ def analyze(story: dict) -> tuple[dict, float]:
         print(f"  Leaked real names {leaks}; retrying ...")
         extra = f"\nYou previously leaked these — they are STILL banned: {', '.join(leaks)}"
 
-    # Show anonymous people by their role ("Junior Associate") instead of the
-    # name the model insists on putting in fictional_name ("Clara Simmons").
+    # Show hidden-identity people by their role ("Junior Associate") instead of a
+    # personal name. This role becomes their id everywhere; scene_writer copies it
+    # exactly (and the safety net there drops any name that isn't a real cast id).
     result = label_anonymous_by_role(result)
 
     # Save the list of real names we banned, so later steps (scene_writer.py)

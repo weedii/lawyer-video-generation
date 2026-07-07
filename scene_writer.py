@@ -33,7 +33,11 @@ KEY = os.getenv("OPENAI_API_KEY")
 if not KEY:
     sys.exit("ERROR: OPENAI_API_KEY is empty. Paste your OpenAI key in .env.")
 
-MODEL = "gpt-4o-mini"
+# GPT-4.1 (not the cheap mini): writes far better dramatic dialogue AND obeys the
+# strict rules — use ONLY the exact cast names, keep the jargon, the structure,
+# the 2-speaker cap. gpt-4o-mini invented names that weren't in the cast, which
+# left characters with no voice (the "one voice says everything" bug).
+MODEL = "gpt-4.1"
 OUT_DIR = "output"
 
 # HARD LIMIT from the video model: Kling generates at most TWO distinct voices
@@ -54,6 +58,14 @@ Speakers:
 - Use as MANY of the cast as the story needs across the scenes — there is NO limit
   on how many characters appear in the video (a story may be one lead plus several
   others). The only limit is per scene (two speakers), never on the whole cast.
+- PREFER to bring the other cast members INTO the drama, not just the two leads:
+  when the story supports it, give a side character (e.g. the coroner, a colleague,
+  the complainant) their own confrontation scene with one of the leads, so the
+  video feels like a real world with several people — not two people talking the
+  whole time. BUT let the STORY decide: only use a character when they genuinely
+  belong in that beat. Never force in a character, and never invent filler dialogue
+  just to use someone. A tight two-person story is fine if that is what the story
+  is; a richer story should spread across more of the cast.
 - Also use a "Narrator" for the opening hook and closing cliffhanger (voiceover).
 
 INTRODUCE NEW FACES (so the viewer is never confused):
@@ -76,6 +88,13 @@ STRUCTURE (a real beginning, middle and end) — 5 to 7 SCENES total:
 HARD RULES:
 - A DIALOGUE scene has AT MOST TWO speaking characters (the video model allows
   only two voices per shot). Pick the two who matter for that beat.
+- ONLY those two people exist in the shot. The "shot" and "action" text must
+  describe ONLY those two characters — NEVER mention, include, or hint at anyone
+  else: no third character, no bystander, no colleague "nearby", no one "in the
+  background", no crowd. If a third person matters to the story, give THEM their
+  own separate scene with one of the two. (Reason: the shot is built from only
+  those two people's photos, so any other person named gets invented as a random
+  new face — wrong person, wrong gender, breaks consistency.)
 - Each dialogue scene has 2 to 4 short lines total, alternating between the two
   characters so they actually talk to each other.
 - Every DIALOGUE line must reference a CONCRETE fact from the story (a real event,
@@ -95,10 +114,11 @@ HARD RULES:
 FOR EACH SCENE also give:
 - "shot": a cinematic shot + camera direction (e.g. "medium two-shot, slow dolly
   in", "over-the-shoulder close-up", "static wide").
-- "action": the BLOCKING — what the characters physically DO in the shot and how
-  they relate in space (e.g. "the father sits at the table gripping a file; the
-  daughter stands over him, arms crossed, then leans in"). Describe the
-  interaction and eyelines so they read as being in the same room.
+- "action": the BLOCKING — what the TWO scene characters physically DO in the shot
+  and how they relate in space (e.g. "the father sits at the table gripping a file;
+  the daughter stands over him, arms crossed, then leans in"). Describe the
+  interaction and eyelines so they read as being in the same room. Mention ONLY
+  those two people — no one else appears.
 - For DIALOGUE lines, an "emotion": one delivery cue (weary, smug, panicked,
   cold, defensive, contemptuous, ...).
 
@@ -114,10 +134,17 @@ Return ONLY valid JSON with exactly this shape:
 """
 
 
-def clean_scenes(script: dict) -> dict:
+def clean_scenes(script: dict, valid_names: list = None) -> dict:
     """Keep only well-formed scenes and fill any missing fields, so the rest of
     the pipeline always gets clean, predictable data. Also enforce the 2-speaker
-    limit per dialogue scene (the video model's hard cap)."""
+    limit per dialogue scene (the video model's hard cap).
+
+    valid_names: the real cast names. If given, any dialogue line whose speaker is
+    NOT a real cast member is DROPPED — because a made-up speaker has no voice and
+    no face, so Kling would speak their lines in another character's voice (the bug
+    where the man said everyone's lines). This is the safety net; the real fix is
+    making the model use the exact cast names in the first place."""
+    valid = {n.strip().lower() for n in valid_names} if valid_names else None
     cleaned = []
     for sc in script.get("scenes", []):
         if not isinstance(sc, dict):
@@ -147,6 +174,9 @@ def clean_scenes(script: dict) -> dict:
                 for d in sc.get("dialogue", [])
                 if isinstance(d, dict) and d.get("line") and d.get("character")
             ]
+            # Drop lines spoken by a name that isn't a real cast member (no voice/face).
+            if valid is not None:
+                lines = [d for d in lines if d["character"].strip().lower() in valid]
             if not lines:
                 continue
             # Speaking characters, in first-appearance order, capped at TWO.
@@ -174,6 +204,26 @@ def leaked_names(script: dict, banned: list) -> list:
     return leaks
 
 
+def unknown_speakers(script: dict, valid_names: list) -> list:
+    """Any speaker/character name used in the script that is NOT a real cast
+    member. These are the bug: an invented name has no voice and no face, so its
+    lines get spoken in another character's voice. We detect them so we can make
+    the model rewrite using the exact cast names."""
+    valid = {n.strip().lower() for n in valid_names}
+    bad = set()
+    for sc in script.get("scenes", []):
+        if not isinstance(sc, dict):
+            continue
+        for d in sc.get("dialogue", []) or []:
+            nm = (d.get("character") or "").strip() if isinstance(d, dict) else ""
+            if nm and nm.lower() not in valid:
+                bad.add(nm)
+        for nm in sc.get("characters", []) or []:
+            if nm and nm.strip().lower() not in valid:
+                bad.add(nm.strip())
+    return sorted(bad)
+
+
 def write_script(data: dict, story_body: str):
     client = OpenAI(api_key=KEY, timeout=45.0, max_retries=3)
 
@@ -186,18 +236,27 @@ def write_script(data: dict, story_body: str):
     )
     banned = data.get("real_names", [])
 
+    # The EXACT names every "character" field must copy. Inventing any other name
+    # is the bug that made one voice speak everyone's lines.
+    valid_names = [c["fictional_name"] for c in data.get("characters", [])]
+
     user_content = (
         f"REAL STORY (use these facts and details, but map any real people onto "
         f"the fictional cast below):\n{story_body}\n\n"
         f"SHORT SUMMARY:\n{data['summary']}\n\n"
         f"WHY IT MATTERS:\n{data.get('why_it_works', '')}\n\n"
-        f"CAST (use only these names for dialogue):\n{cast}"
+        f"CAST (use only these names for dialogue):\n{cast}\n\n"
+        f"VALID CHARACTER NAMES — every \"character\" field MUST be copied EXACTLY "
+        f"from this list, character-for-character. NEVER invent a new name or "
+        f"rename anyone (not even if a name looks like a job title):\n"
+        f"{' | '.join(valid_names)}"
     )
 
     total_cost = 0.0
-    extra = ""
+    extra = ""          # banned-name correction for the next attempt
+    name_extra = ""     # invented-name correction for the next attempt
     script = {}
-    for attempt in range(2):
+    for attempt in range(3):
         ban_note = ""
         if banned:
             ban_note = (
@@ -210,7 +269,7 @@ def write_script(data: dict, story_body: str):
         resp = client.chat.completions.create(
             model=MODEL,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT + ban_note},
+                {"role": "system", "content": SYSTEM_PROMPT + ban_note + name_extra},
                 {"role": "user", "content": user_content},
             ],
             response_format={"type": "json_object"},
@@ -219,16 +278,26 @@ def write_script(data: dict, story_body: str):
         total_cost += costs.openai_cost(
             resp.usage.prompt_tokens, resp.usage.completion_tokens
         )
-        script = clean_scenes(json.loads(resp.choices[0].message.content))
+        raw = json.loads(resp.choices[0].message.content)
+        unknown = unknown_speakers(raw, valid_names)          # detect BEFORE we strip them
+        script = clean_scenes(raw, valid_names)               # safety net: drop any that slipped
 
         leaks = leaked_names(script, banned)
-        if not leaks:
+        if not leaks and not unknown:
             break
-        print(f"  Leaked real names {leaks}; rewriting ...")
-        extra = (
-            f"\nYou previously leaked these — they are STILL banned: "
-            f"{', '.join(leaks)}. Replace each with the matching fictional character."
-        )
+        if unknown:
+            print(f"  Used names not in the cast {unknown}; rewriting ...")
+            name_extra = (
+                "\n\nNAME ERROR — you used speaker names that are NOT in the cast: "
+                f"{', '.join(unknown)}. Every \"character\" field must be copied "
+                f"EXACTLY from this list, nothing else: {', '.join(valid_names)}."
+            )
+        if leaks:
+            print(f"  Leaked real names {leaks}; rewriting ...")
+            extra = (
+                f"\nYou previously leaked these — they are STILL banned: "
+                f"{', '.join(leaks)}. Replace each with the matching fictional character."
+            )
 
     return script, total_cost
 

@@ -113,9 +113,10 @@ SYNC_LIPSYNC_PER_SEC = 0.0117
 # This is a rough upper-bound estimate just so a number prints.
 ELEVENLABS_PER_1K_CHARS = 0.30
 
-# OpenAI gpt-4o-mini published rate, per 1,000,000 tokens. Tiny (~$0.002/video).
-OPENAI_INPUT_PER_1M = 0.15    # $ per 1,000,000 input tokens
-OPENAI_OUTPUT_PER_1M = 0.60   # $ per 1,000,000 output tokens
+# OpenAI GPT-4.1 published rate, per 1,000,000 tokens. Still tiny (~$0.08/video)
+# next to the Kling clips. (gpt-4o-mini was 0.15/0.60 but too weak — see docs.)
+OPENAI_INPUT_PER_1M = 2.00    # $ per 1,000,000 input tokens
+OPENAI_OUTPUT_PER_1M = 8.00   # $ per 1,000,000 output tokens
 
 
 def show(label: str, amount: float):

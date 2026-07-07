@@ -123,6 +123,12 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
     later shot in the same place doesn't look like a different building."""
     urls = [fal_client.upload_file(p) for p in portrait_paths]
     n = len(urls)
+    # HARD constraint: only the people whose photos we pass may appear. Otherwise,
+    # if the action text names anyone else, Nano invents a random extra face
+    # (wrong person, wrong gender) and consistency breaks.
+    only = (f"EXACTLY {n} " + ("person" if n == 1 else "people") +
+            f" in the frame — only the {n} shown in the reference photos, and NO "
+            f"other person: no third person, no bystander, no extra face, no crowd.")
     if room_ref and os.path.exists(room_ref):
         urls.append(fal_client.upload_file(room_ref))   # room reference goes LAST
         prompt = (
@@ -130,7 +136,7 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
             f"those people together inside the SAME room shown in the last image — "
             f"keep that room's EXACT architecture, windows, wood panelling, "
             f"furniture, lighting and colour so it is unmistakably the identical "
-            f"location. {action}. Keep each person's exact face and clothing. "
+            f"location. {only} {action}. Keep each person's exact face and clothing. "
             f"{shot}. Vertical 9:16 portrait, upright: the people stand/sit in the "
             f"foreground with heads near the TOP of the frame, the room rising "
             f"behind and above them. Photorealistic. NOT rotated, NOT sideways, "
@@ -139,7 +145,7 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
     else:
         prompt = (
             f"Put these people together in ONE cinematic shot inside {setting}. "
-            f"{action}. Keep their exact faces and clothing. {shot}. Vertical 9:16 "
+            f"{only} {action}. Keep their exact faces and clothing. {shot}. Vertical 9:16 "
             f"portrait, upright: the people stand/sit in the foreground with heads "
             f"near the TOP of the frame, the room rising behind and above them. Moody "
             f"cinematic prestige legal-drama lighting, photorealistic. NOT rotated, "

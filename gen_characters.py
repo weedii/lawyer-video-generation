@@ -97,18 +97,35 @@ def main():
     if not characters:
         sys.exit("No characters found in analysis.json.")
 
-    print(f"Found {len(characters)} characters. Making one image each ...\n")
+    # Only draw a face for characters who ACTUALLY appear in the script — analyze
+    # often invents extra people (a coroner, a witness) the script never uses, and
+    # a portrait for someone who never appears is $0.15 wasted. This is why the
+    # pipeline writes the script BEFORE this step. Used = anyone listed in a scene,
+    # plus the first two named leads (they fill the narration establishing shots).
+    scenes = (data.get("script") or {}).get("scenes", [])
+    used = {n for s in scenes for n in s.get("characters", [])}
+    used.update([c["fictional_name"] for c in characters if not c.get("anonymous")][:2])
+    if not scenes:                      # script not written yet (standalone run) -> do all
+        used = {c["fictional_name"] for c in characters}
+
+    to_make = [c for c in characters if c["fictional_name"] in used]
+    print(f"{len(characters)} characters invented; {len(to_make)} used in the "
+          f"script. Making a portrait for each used one ...\n")
 
     total_cost = 0.0
 
     for c in characters:
         name = c["fictional_name"]
+        if name not in used:
+            # Not in the script — skip it and save the render.
+            print(f"- {name} ({c['role']}) — not in the script, skipped (saved $0.15)")
+            continue
         file_name = f"char_{slug(name)}.png"
         out_path = os.path.join(OUT_DIR, file_name)
 
-        # EVERY character gets a real, photorealistic locked portrait (Nano Banana
-        # Pro) — including the hidden-identity people. They are real actors on
-        # screen, not shadows; the only difference is they are referred to by
+        # EVERY used character gets a real, photorealistic locked portrait (Nano
+        # Banana Pro) — including the hidden-identity people. They are real actors
+        # on screen, not shadows; the only difference is they are referred to by
         # role, not a real name. One locked face, reused in every scene.
         who = f"{name} ({c['role']}{', by role' if c.get('anonymous') else ''})"
         prompt = f"{c['image_prompt']} {STYLE}"
@@ -123,7 +140,7 @@ def main():
 
     # Record this step's real cost for the end-of-pipeline summary.
     costs.record(data, "images",
-                 f"Character portraits - Nano Banana Pro x{len(characters)}",
+                 f"Character portraits - Nano Banana Pro x{len(to_make)}",
                  total_cost)
 
     # Save the whole analysis file back, now with the image files included.
@@ -131,7 +148,7 @@ def main():
         json.dump(data, f, indent=2, ensure_ascii=False)
 
     print("\nUpdated output/analysis.json with the image file of each character.")
-    costs.show(f"{len(characters)} character images", total_cost)
+    costs.show(f"{len(to_make)} character images", total_cost)
 
 
 if __name__ == "__main__":
