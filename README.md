@@ -14,9 +14,11 @@ shows like *Suits*, *Billions*, and *The Good Wife*.
 ## What it does: Link → Final video
 
 Give it a story link and it automatically produces a finished vertical
-microdrama as a **short film**: a **narrator hook**, then **cinematic scenes
-where the characters act and talk TO EACH OTHER in the same room**, and a
-**cliffhanger** ending. Cost: **about $12–15 per video.**
+microdrama as a **first-person short film**: the **main character narrates his
+own story straight to camera** (opening hook, mid bridges, cliffhanger — alone,
+doing something, in his own voice), intercut with **cinematic scenes where the
+characters act and talk TO EACH OTHER in the same room**. Cost: **about $12–15
+per video.**
 
 ### Run it
 ```bash
@@ -31,8 +33,8 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 | 2 | `analyze.py` | Organize + invent fictional characters | OpenAI GPT-4.1 | ~$0.03 |
 | 3 | `gen_characters.py` | One locked vertical portrait per character (used as scene reference) | fal.ai Nano Banana Pro (2K) | $0.15 each |
 | 4 | `scene_writer.py` | Write the SCENE script (5–7 scenes; each dialogue scene = 2 characters in one room) | OpenAI GPT-4.1 | ~$0.04 |
-| 5 | `voice_maker.py` | Clone each character's ElevenLabs voice into a reusable Kling voice_id + narrator voiceover | ElevenLabs + Kling create-voice | by characters |
-| 6 | `scene_clips.py` | Per scene: compose the characters into one shot, then animate it as a talking dialogue scene in our cloned voices | Nano Banana Pro (compose) + Kling v3 (dialogue) + Seedance (narration) | ~$0.15/sec dialogue |
+| 5 | `voice_maker.py` | Clone every speaking character's ElevenLabs voice (incl. the narrating lead) into a reusable Kling voice_id | ElevenLabs + Kling create-voice | by characters |
+| 6 | `scene_clips.py` | Per scene: compose the characters into one shot, then animate it in our cloned voices — dialogue scenes (2 people) and the lead's memoir narration (to camera) | Nano Banana Pro (compose) + Kling v3 | ~$0.15/sec |
 | 7 | `assemble.py` | Join the scenes into the final video | ffmpeg (local) | free |
 
 ### Results (in `output/`)
@@ -108,8 +110,7 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 - Character portrait (Nano Banana Pro, 2K): $0.15 each
 - Voice (ElevenLabs v3) + one Kling voice clone per character: by characters (clone reused every scene)
 - Composed scene image (Nano Banana Pro): $0.15 per scene
-- Dialogue scene (Kling v3 standard, audio + cloned voices): $0.154 per second
-- Narration motion (Seedance 1.5 Pro, no audio): $0.026 per second
+- Scene clip — dialogue OR memoir narration (Kling v3 standard, audio + cloned voices): $0.154 per second
 - **Roughly $12–15 for one finished ~75s video** (real multi-actor cinema costs more)
 
 ---

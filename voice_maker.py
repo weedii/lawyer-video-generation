@@ -1,22 +1,25 @@
 """STAGE 2 - STEP 2: Voices for the scene pipeline.
 
-NEW MODEL (Kling scene pipeline). Two jobs:
-  1. For every SPEAKING character: generate one ElevenLabs voice SAMPLE, then
-     CLONE it into a Kling voice_id (create-voice). Kling then speaks that
-     character's dialogue in OUR voice, and the SAME voice_id is reused in every
-     scene, so a character sounds identical across the whole film (voice
-     consistency — the thing plain scene models can't do).
-  2. For every NARRATION scene: generate the Narrator's ElevenLabs voiceover mp3
-     (played over the establishing shot by scene_clips.py).
+NEW MODEL (Kling scene pipeline). One job now:
+  For every SPEAKING character — AND the protagonist who narrates — generate one
+  ElevenLabs voice SAMPLE, then CLONE it into a Kling voice_id (create-voice).
+  Kling then speaks that character's lines in OUR voice, and the SAME voice_id is
+  reused in every scene, so a character sounds identical across the whole film
+  (voice consistency — the thing plain scene models can't do).
+
+  Memoir style: the narration is now PERFORMED by the protagonist (first person,
+  on camera, in scene_clips.py via Kling), so it uses the protagonist's OWN cloned
+  voice — there is no separate detached narrator voiceover anymore. We just make
+  sure the protagonist gets a cloned voice even if they never speak in a dialogue
+  scene.
 
 Usage:
     python voice_maker.py
 
 Reads:  output/analysis.json   (needs the "script" section from scene_writer.py)
 Output: - writes c["voice_id"] (ElevenLabs) and c["kling_voice_id"] onto each
-          speaking character in analysis.json
-        - writes scene["audio"] (narrator mp3) onto each narration scene
-        - saves voice_sample_<name>.mp3 and voice_narr_<n>.mp3 in output/
+          speaking character (and the narrating protagonist) in analysis.json
+        - saves voice_sample_<name>.mp3 in output/
 Cost:   ElevenLabs by characters + a one-time Kling clone per character.
 """
 import os
@@ -44,7 +47,6 @@ CREATE_VOICE_MODEL = "fal-ai/kling-video/create-voice"   # clone -> voice_id
 # Ready-made ElevenLabs voices by gender; each character keeps one.
 FEMALE_VOICES = ["EXAVITQu4vr4xnSDxMaL", "cgSgspJ2msm6clMCkdW9"]
 MALE_VOICES = ["JBFqnCBsd6RMkjVDRZzb", "nPczCjzI2devNBz1zQrb"]
-NARRATOR_VOICE = "onwK4e9ZLuTAKqWW03F9"   # Daniel — deep, documentary narrator
 
 
 def slug(name: str) -> str:
@@ -104,14 +106,35 @@ def clone_to_kling(sample_path: str) -> str:
 
 
 def speaking_characters(scenes: list) -> list:
-    """Ordered, unique list of character names that actually speak in dialogue."""
+    """Ordered, unique list of every character who needs a cloned voice: the
+    dialogue speakers PLUS the protagonist(s) who perform the narration (they
+    speak their memoir to camera in their own voice), so the narrator always has
+    a voice even if they never appear in a dialogue scene."""
     order = []
     for sc in scenes:
         if sc.get("type") == "dialogue":
             for d in sc.get("dialogue", []):
                 if d["character"] not in order:
                     order.append(d["character"])
+        elif sc.get("type") == "narration":
+            for name in sc.get("characters", []):
+                if name not in order:
+                    order.append(name)
     return order
+
+
+def character_sample_text(name: str, scenes: list) -> str:
+    """Everything this character says across the film — their dialogue lines AND
+    (if they narrate) their narration — used to build their voice-clone sample."""
+    parts = []
+    for sc in scenes:
+        if sc.get("type") == "dialogue":
+            parts += [d["line"] for d in sc.get("dialogue", [])
+                      if d.get("character") == name and d.get("line")]
+        elif sc.get("type") == "narration" and name in sc.get("characters", []):
+            if sc.get("narration"):
+                parts.append(sc["narration"])
+    return " ".join(parts)
 
 
 def main():
@@ -146,11 +169,9 @@ def main():
             eleven = MALE_VOICES[m_i % len(MALE_VOICES)]; m_i += 1
         c["voice_id"] = eleven
 
-        # Build a clone SAMPLE from the character's own lines (must be >=5s for
-        # create-voice); pad with a neutral line if their dialogue is too short.
-        own_lines = [d["line"] for sc in scenes if sc.get("type") == "dialogue"
-                     for d in sc["dialogue"] if d["character"] == name]
-        sample_text = " ".join(own_lines)
+        # Build a clone SAMPLE from everything the character says — dialogue AND
+        # narration (must be >=5s for create-voice); pad if it's too short.
+        sample_text = character_sample_text(name, scenes)
         if len(sample_text) < 200:      # ~ under ~12s of speech: pad it
             sample_text += (" I have spent my whole career at the Bar, and I know "
                             "exactly how these proceedings work.")
@@ -161,20 +182,14 @@ def main():
         kling_id = clone_to_kling(sample_path)
         c["kling_voice_id"] = kling_id
         clones += 1
-        print(f"  {name}: ElevenLabs {eleven} -> Kling voice_id {kling_id}")
+        tag = " (narrator)" if any(
+            sc.get("type") == "narration" and name in sc.get("characters", [])
+            for sc in scenes) else ""
+        print(f"  {name}{tag}: ElevenLabs {eleven} -> Kling voice_id {kling_id}")
 
-    # --- 2. Narrator voiceover for each narration scene -------------------
-    n = 0
-    for i, sc in enumerate(scenes, 1):
-        if sc.get("type") != "narration":
-            continue
-        n += 1
-        text = sc.get("narration", "")
-        file_name = f"voice_narr_{i:02d}.mp3"
-        make_voice(text, NARRATOR_VOICE, os.path.join(OUT_DIR, file_name))
-        sc["audio"] = file_name
-        total_chars += len(text)
-        print(f"  Narration scene {i}: saved {file_name}")
+    # (Narration is performed on camera by the protagonist in their own cloned
+    #  voice — Kling speaks it in scene_clips.py — so there is no separate
+    #  narrator voiceover step anymore.)
 
     # --- Cost (ElevenLabs by characters + Kling clone fee) ----------------
     est = (total_chars / 1000 * costs.ELEVENLABS_PER_1K_CHARS
@@ -186,7 +201,8 @@ def main():
     with open(analysis_path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-    print(f"\nUpdated analysis.json with {clones} cloned voice_ids + {n} narrator lines.")
+    print(f"\nUpdated analysis.json with {clones} cloned voice_ids "
+          f"(dialogue + the narrating protagonist).")
     costs.show(f"voices ({total_chars} chars, {clones} clones)", est)
 
 

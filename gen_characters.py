@@ -103,7 +103,10 @@ def main():
     # pipeline writes the script BEFORE this step. Used = anyone listed in a scene,
     # plus the first two named leads (they fill the narration establishing shots).
     scenes = (data.get("script") or {}).get("scenes", [])
+    # "used" = anyone who SPEAKS (characters) OR is merely ON SCREEN (onscreen) in
+    # any scene — silent reactors are visible too, so they also need a real face.
     used = {n for s in scenes for n in s.get("characters", [])}
+    used.update(n for s in scenes for n in s.get("onscreen", []))
     used.update([c["fictional_name"] for c in characters if not c.get("anonymous")][:2])
     if not scenes:                      # script not written yet (standalone run) -> do all
         used = {c["fictional_name"] for c in characters}

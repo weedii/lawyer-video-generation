@@ -5,10 +5,15 @@ scene is one cinematic shot where the characters ACT and talk TO EACH OTHER —
 like a real short film — instead of one avatar talking to camera per line.
 
 It reads the analyzed story + characters AND the raw scraped story, then writes
-5-7 scenes with a real arc:
-  - a NARRATION hook scene to open (voiceover over an establishing shot),
-  - DIALOGUE scenes that dramatize the REAL events (two people in one room),
-  - a NARRATION cliffhanger scene to close.
+5-7 scenes with a real arc, in a first-person MEMOIR style:
+  - a NARRATION hook to open — the PROTAGONIST, alone and doing something in a
+    fitting place, tells us in first person how it began (looking at camera),
+  - DIALOGUE scenes that dramatize the REAL events (two people in one room, never
+    facing the camera),
+  - optional NARRATION "bridge" beats (the protagonist again) between them,
+  - a NARRATION cliffhanger to close.
+The protagonist is BOTH narrator and actor: every narration beat is the same lead
+performing to camera, so downstream it uses that character's face + cloned voice.
 
 Usage:
     python scene_writer.py
@@ -40,6 +45,18 @@ if not KEY:
 MODEL = "gpt-4.1"
 OUT_DIR = "output"
 
+
+def lead_name(data: dict) -> str:
+    """The PROTAGONIST = the character who narrates the whole story in first
+    person AND acts in it (memoir style). We pick the first NAMED character
+    (falling back to the very first character); the narration beats are all
+    performed by this one person, so the video has one consistent narrator."""
+    chars = data.get("characters", [])
+    for c in chars:
+        if not c.get("anonymous"):
+            return c["fictional_name"]
+    return chars[0]["fictional_name"] if chars else ""
+
 # HARD LIMIT from the video model: Kling generates at most TWO distinct voices
 # per scene, so every dialogue scene may have AT MOST 2 speaking characters.
 SYSTEM_PROMPT = """
@@ -66,7 +83,30 @@ Speakers:
   belong in that beat. Never force in a character, and never invent filler dialogue
   just to use someone. A tight two-person story is fine if that is what the story
   is; a richer story should spread across more of the cast.
-- Also use a "Narrator" for the opening hook and closing cliffhanger (voiceover).
+  CRUCIAL: each extra character gets their OWN separate scene / their OWN moment —
+  NEVER swap a different person into the MIDDLE of another character's continuous
+  conversation. If the lead is talking to colleague A in a place, that WHOLE
+  exchange stays lead + A; colleague B is a DIFFERENT scene, not a mid-conversation
+  substitution. Spreading the cast means MORE separate scenes, never a partner swap
+  inside one event.
+THE NARRATOR IS THE MAIN CHARACTER (first-person memoir — this is the style):
+- The whole story is told by ONE lead character, the PROTAGONIST, who is BOTH the
+  narrator AND an actor in the drama. The narration is NOT a detached documentary
+  voice — it is the protagonist looking back and telling us THEIR OWN story in the
+  FIRST PERSON ("I built that firm from nothing", "I should have seen it coming",
+  "That was the morning it all fell apart").
+- Every NARRATION scene is the protagonist ALONE, PERFORMING to camera: they are in
+  a place that fits where the story has taken them (a holding cell, the empty
+  tribunal room, the courthouse steps, chambers late at night, walking a corridor),
+  DOING something small and real (pacing, sitting on the bunk, staring out a window,
+  walking slowly) WHILE they speak their narration aloud to us. They ACT it — body
+  and voice, mouth moving, looking straight at us. This is a performance, not a
+  voiceover.
+- The protagonist for THIS video is named in the user message ("NARRATOR: ..."). Use
+  that EXACT name. Write every narration beat in their first-person voice, and put
+  that one name in the narration scene's "characters" (a one-person list).
+- The DIALOGUE scenes are the opposite: there the characters act and talk TO EACH
+  OTHER and NEVER look at the camera. Only the protagonist's solo narration faces us.
 
 INTRODUCE NEW FACES (so the viewer is never confused):
 - The FIRST time a character appears who wasn't in an earlier scene, make it clear
@@ -76,25 +116,45 @@ INTRODUCE NEW FACES (so the viewer is never confused):
   face into a scene with no context.
 
 STRUCTURE (a real beginning, middle and end) — 5 to 7 SCENES total:
-1. OPEN with exactly one NARRATION scene (beat "intro"): a punchy one-sentence
-   voiceover hook that sets up the scandal.
-2. MIDDLE: 3 to 5 DIALOGUE scenes that DRAMATIZE THE REAL EVENTS, building through
-   the beats "setup" -> "escalation" -> "twist". Each scene is two characters
-   confronting each other in one place. OPTIONAL: when a new character enters the
-   story mid-way, you MAY put ONE short NARRATION scene (beat "bridge") right
-   before their first scene to introduce them in a single voiceover sentence.
-3. CLOSE with exactly one NARRATION scene (beat "cliffhanger"): a strong button.
+1. OPEN with exactly one NARRATION scene (beat "intro"): the protagonist, alone in a
+   fitting place and doing something, tells us in FIRST PERSON how it began — a
+   punchy hook that sets up the scandal.
+2. MIDDLE: 3 to 4 DIALOGUE scenes that DRAMATIZE THE REAL EVENTS, building through
+   the beats "setup" -> "escalation" -> "twist". Give ONE scene per DISTINCT EVENT
+   or place (e.g. the train exchange = ONE scene, the messages fallout = ONE scene,
+   the tribunal = ONE scene) — do NOT split a single event into several scenes just
+   to make more of them; fewer, fuller scenes look far more consistent than many
+   tiny fragments that reset the set. Each scene is two characters confronting each
+   other in one place. OPTIONAL: between them you MAY put ONE short NARRATION scene
+   (beat "bridge") — again the protagonist alone, first person, doing something — to
+   bridge to what comes next or introduce a new player.
+3. CLOSE with exactly one NARRATION scene (beat "cliffhanger"): the protagonist,
+   alone, first person, a strong button.
 
 HARD RULES:
-- A DIALOGUE scene has AT MOST TWO speaking characters (the video model allows
-  only two voices per shot). Pick the two who matter for that beat.
-- ONLY those two people exist in the shot. The "shot" and "action" text must
-  describe ONLY those two characters — NEVER mention, include, or hint at anyone
-  else: no third character, no bystander, no colleague "nearby", no one "in the
-  background", no crowd. If a third person matters to the story, give THEM their
-  own separate scene with one of the two. (Reason: the shot is built from only
-  those two people's photos, so any other person named gets invented as a random
-  new face — wrong person, wrong gender, breaks consistency.)
+- A NARRATION scene has EXACTLY ONE person — the protagonist, ALONE. Its "shot" and
+  "action" must describe ONLY the protagonist (pacing, sitting, staring, walking) in
+  an EMPTY place; NEVER put another character, bystander, passer-by, background
+  person or crowd in a narration shot — the street/room behind them is deserted. The
+  narration text is FIRST PERSON (the protagonist's own "I"/"me"), never third-person.
+- KEEP NARRATION SHORT AND PUNCHY: each narration beat is ONE or at most TWO short
+  sentences (about 18 words / ~7 seconds MAX). It's a sharp hook or button, not a
+  paragraph. Cut every spare word — no rambling, no lists, no repeated ideas.
+- SPEAKERS vs ON-SCREEN. Two separate lists per dialogue scene:
+    * "characters" = the SPEAKERS — AT MOST TWO (the video model allows only two
+      voices per shot). These are the two who actually talk in this beat.
+    * "onscreen" = EVERYONE physically present in the shot (2 to 4 real cast
+      members), INCLUDING the two speakers. The extra people are really there —
+      they REACT silently (they do not speak in this clip), but we SEE them.
+  Use "onscreen" to keep people PRESENT instead of swapping them out. Example: on
+  the train, if two junior colleagues were both there, put BOTH in "onscreen" and
+  let one of them + the lead speak — the other stays visible, reacting. That way we
+  never cut to a "different person"; everyone who was in that moment stays in frame.
+- The "shot" and "action" text may describe ALL the people in "onscreen" (the two
+  speakers AND the silent reactors) and how they sit/stand together — but NEVER
+  mention, include, or hint at anyone who is NOT in "onscreen": no invented
+  bystander, no "colleague nearby" you didn't list, no crowd. Everyone named must be
+  a real cast member you put in "onscreen" (each has a real locked photo).
 - Each dialogue scene has 2 to 4 short lines total, alternating between the two
   characters so they actually talk to each other.
 - Every DIALOGUE line must reference a CONCRETE fact from the story (a real event,
@@ -110,15 +170,34 @@ HARD RULES:
   file at the end of the first, the next scene ASSUMES that already happened (e.g.
   "now on her feet, she paces" — NOT "she stands up" again). Never repeat the same
   physical move in consecutive scenes; the video is one flowing story, not a loop.
+- ONE EVENT = ONE SCENE, ONE PAIR, ONE PLACE. A single real conversation (e.g. the
+  whole train exchange) is ONE scene with ONE partner — never chop it into two or
+  three fragments, and NEVER hand the second half of the same exchange (or the other
+  person's reply) to a DIFFERENT character. Merge a continuous back-and-forth into a
+  single scene with the full 3-4 lines. Do not create extra scenes by splitting a
+  conversation — that resets the seats/framing and swaps the person mid-talk (the
+  worst consistency break).
+- SAME PLACE + SAME MOMENT => SAME PAIR + IDENTICAL "setting" TEXT. If you truly need
+  two consecutive scenes in the same location and moment, keep the SAME two
+  characters AND write the byte-for-byte IDENTICAL "setting" string in both, so the
+  film keeps the exact same room, seats and framing (the pipeline continues the shot
+  from the previous one). Change the pair OR the setting wording ONLY when the story
+  genuinely moves to a new place or a later time. Do NOT reword the same location
+  ("train carriage, morning rush" vs "same train, a bit later") — reuse it exactly.
 
 FOR EACH SCENE also give:
 - "shot": a cinematic shot + camera direction (e.g. "medium two-shot, slow dolly
   in", "over-the-shoulder close-up", "static wide").
-- "action": the BLOCKING — what the TWO scene characters physically DO in the shot
-  and how they relate in space (e.g. "the father sits at the table gripping a file;
-  the daughter stands over him, arms crossed, then leans in"). Describe the
-  interaction and eyelines so they read as being in the same room. Mention ONLY
-  those two people — no one else appears.
+- "action": the BLOCKING — what the people in the shot physically DO. For a DIALOGUE
+  scene, describe ALL the "onscreen" people and how they relate in space: the two
+  speakers talking, plus any silent reactors and what they do (e.g. "the lead leans
+  back grinning while the solicitor opposite crosses her arms; beside her the trainee
+  keeps her eyes on her file, uneasy"). Describe interaction and eyelines so they
+  read as being in the same room. Mention ONLY people listed in "onscreen". For a
+  NARRATION scene,
+  the lone protagonist and what they do while telling us the story (e.g. "sits on
+  the cell bunk, forearms on knees, looking up into the camera"; "walks the empty
+  courthouse corridor toward us") — mention ONLY the protagonist.
 - For DIALOGUE lines, an "emotion": one delivery cue (weary, smug, panicked,
   cold, defensive, contemptuous, ...).
 
@@ -127,14 +206,14 @@ Return ONLY valid JSON with exactly this shape:
   "title": "short episode title",
   "setting": "one line: the real place where this drama happens",
   "scenes": [
-    {"type": "narration", "beat": "intro", "setting": "the real place", "shot": "shot + camera", "action": "what is seen in the establishing shot", "characters": [], "narration": "the voiceover hook", "dialogue": []},
-    {"type": "dialogue", "beat": "setup", "setting": "the real place", "shot": "shot + camera", "action": "blocking: what the two characters physically do and how they face each other", "characters": ["Exact Name A", "Exact Name B"], "narration": "", "dialogue": [{"character": "Exact Name A", "line": "what is said", "emotion": "cue"}, {"character": "Exact Name B", "line": "reply", "emotion": "cue"}]}
+    {"type": "narration", "beat": "intro", "setting": "a fitting place the story put the protagonist (e.g. a holding cell)", "shot": "shot + camera on the lone protagonist", "action": "what the protagonist ALONE physically does while speaking to us (paces, sits, stares out)", "characters": ["Exact Protagonist Name"], "narration": "first-person narration the protagonist speaks to camera", "dialogue": []},
+    {"type": "dialogue", "beat": "setup", "setting": "the real place", "shot": "shot + camera", "action": "blocking for EVERYONE onscreen: the 2 speakers + any silent reactors and what they do", "onscreen": ["Exact Name A", "Exact Name B", "Exact Name C (present, silent)"], "characters": ["Exact Name A", "Exact Name B"], "narration": "", "dialogue": [{"character": "Exact Name A", "line": "what is said", "emotion": "cue"}, {"character": "Exact Name B", "line": "reply", "emotion": "cue"}]}
   ]
 }
 """
 
 
-def clean_scenes(script: dict, valid_names: list = None) -> dict:
+def clean_scenes(script: dict, valid_names: list = None, lead: str = None) -> dict:
     """Keep only well-formed scenes and fill any missing fields, so the rest of
     the pipeline always gets clean, predictable data. Also enforce the 2-speaker
     limit per dialogue scene (the video model's hard cap).
@@ -156,13 +235,20 @@ def clean_scenes(script: dict, valid_names: list = None) -> dict:
             "setting": sc.get("setting", script.get("setting", "")),
             "shot": sc.get("shot", ""),
             "action": sc.get("action", ""),
-            "characters": [],
+            "characters": [],   # the SPEAKERS (<=2, get voices)
+            "onscreen": [],     # EVERYONE visible in the shot (speakers + silent reactors)
             "narration": (sc.get("narration") or "").strip(),
             "dialogue": [],
         }
         if stype == "narration":
             if not scene["narration"]:
                 continue  # a narration scene with no voiceover is useless
+            # Narration is the protagonist performing SOLO. Force the speaker to the
+            # lead so every narration beat has the same real face + cloned voice
+            # (one consistent narrator), no matter what the model put here.
+            if lead:
+                scene["characters"] = [lead]
+            scene["onscreen"] = list(scene["characters"])   # solo: only the lead
         else:
             # Keep only proper dialogue lines.
             lines = [
@@ -189,6 +275,17 @@ def clean_scenes(script: dict, valid_names: list = None) -> dict:
             lines = [d for d in lines if d["character"] in speakers]
             scene["characters"] = speakers
             scene["dialogue"] = lines
+            # ON-SCREEN cast = everyone visible in the shot. Speakers are always in
+            # (and go first, so the <=4 cap can never drop a speaker); then add the
+            # model's extra present people, but only REAL cast names (no invented
+            # faces). These extras are seen but silent — they keep people in frame
+            # instead of being swapped out between shots.
+            onscreen = list(speakers)
+            for nm in (sc.get("onscreen") or []):
+                nm = nm.strip() if isinstance(nm, str) else ""
+                if nm and nm not in onscreen and (valid is None or nm.lower() in valid):
+                    onscreen.append(nm)
+            scene["onscreen"] = onscreen[:4]
         cleaned.append(scene)
     script["scenes"] = cleaned
     return script
@@ -240,11 +337,17 @@ def write_script(data: dict, story_body: str):
     # is the bug that made one voice speak everyone's lines.
     valid_names = [c["fictional_name"] for c in data.get("characters", [])]
 
+    # The protagonist who narrates the whole story in first person (memoir style).
+    lead = lead_name(data)
+
     user_content = (
         f"REAL STORY (use these facts and details, but map any real people onto "
         f"the fictional cast below):\n{story_body}\n\n"
         f"SHORT SUMMARY:\n{data['summary']}\n\n"
         f"WHY IT MATTERS:\n{data.get('why_it_works', '')}\n\n"
+        f"NARRATOR (the protagonist who tells the WHOLE story in first person and "
+        f"performs every narration beat, alone, to camera — use this EXACT name for "
+        f"every narration scene's one 'characters' entry):\n{lead}\n\n"
         f"CAST (use only these names for dialogue):\n{cast}\n\n"
         f"VALID CHARACTER NAMES — every \"character\" field MUST be copied EXACTLY "
         f"from this list, character-for-character. NEVER invent a new name or "
@@ -280,7 +383,7 @@ def write_script(data: dict, story_body: str):
         )
         raw = json.loads(resp.choices[0].message.content)
         unknown = unknown_speakers(raw, valid_names)          # detect BEFORE we strip them
-        script = clean_scenes(raw, valid_names)               # safety net: drop any that slipped
+        script = clean_scenes(raw, valid_names, lead)         # safety net: drop any that slipped
 
         leaks = leaked_names(script, banned)
         if not leaks and not unknown:
@@ -311,8 +414,13 @@ def append_markdown(script: dict, path: str):
         lines.append(f"\n**Scene {i} ({beat}) — {sc.get('shot', '')}**")
         lines.append(f"_{sc.get('action', '')}_")
         if sc.get("type") == "narration":
-            lines.append(f"- _Narrator:_ {sc.get('narration', '')}")
+            who = (sc.get("characters") or ["Narrator"])[0]
+            lines.append(f"- _{who} (to camera):_ {sc.get('narration', '')}")
         else:
+            onscreen = sc.get("onscreen") or sc.get("characters", [])
+            speakers = set(sc.get("characters", []))
+            tags = [n if n in speakers else f"{n} (silent)" for n in onscreen]
+            lines.append(f"_On screen: {', '.join(tags)}_")
             for d in sc.get("dialogue", []):
                 emo = f" [{d['emotion']}]" if d.get("emotion") else ""
                 lines.append(f"- **{d['character']}**{emo}: {d['line']}")
@@ -353,8 +461,10 @@ if __name__ == "__main__":
             print(f"  Scene {i} ({sc.get('beat')}) NARRATION: {sc.get('narration')}")
         else:
             who = " + ".join(sc.get("characters", []))
+            extra = [n for n in sc.get("onscreen", []) if n not in sc.get("characters", [])]
+            also = f"  (+ silent: {', '.join(extra)})" if extra else ""
             print(f"  Scene {i} ({sc.get('beat')}) DIALOGUE [{who}], "
-                  f"{len(sc.get('dialogue', []))} lines")
+                  f"{len(sc.get('dialogue', []))} lines{also}")
 
     print("\nSaved scene script -> output/analysis.json (and analysis.md)")
     costs.show("OpenAI scene script", cost)
