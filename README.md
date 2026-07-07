@@ -33,8 +33,8 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 | 2 | `analyze.py` | Organize + invent fictional characters | OpenAI GPT-4.1 | ~$0.03 |
 | 3 | `gen_characters.py` | One locked vertical portrait per character (used as scene reference) | fal.ai Nano Banana Pro (2K) | $0.15 each |
 | 4 | `scene_writer.py` | Write the SCENE script (5–7 scenes; each dialogue scene = 2 characters in one room) | OpenAI GPT-4.1 | ~$0.04 |
-| 5 | `voice_maker.py` | Clone every speaking character's ElevenLabs voice (incl. the narrating lead) into a reusable Kling voice_id | ElevenLabs + Kling create-voice | by characters |
-| 6 | `scene_clips.py` | Per scene: compose the characters into one shot, then animate it in our cloned voices — dialogue scenes (2 people) and the lead's memoir narration (to camera) | Nano Banana Pro (compose) + Kling v3 | ~$0.15/sec |
+| 5 | `voice_maker.py` | Assign each character a fixed ElevenLabs voice_id (free; the swap is billed in step 6) | ElevenLabs voice IDs | free |
+| 6 | `scene_clips.py` | Compose the characters into one shot, render one Veo clip per line (two people acting + talking, native lip-sync), then swap each into our own voice keeping the timing | Nano Banana Pro + Veo 3.1 fast + ElevenLabs Speech-to-Speech | ~$0.15/sec Veo |
 | 7 | `assemble.py` | Join the scenes into the final video | ffmpeg (local) | free |
 
 ### Results (in `output/`)
@@ -108,9 +108,9 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 - Scrape: free
 - Analyze + scene script (OpenAI GPT-4.1): ~$0.07 per story
 - Character portrait (Nano Banana Pro, 2K): $0.15 each
-- Voice (ElevenLabs v3) + one Kling voice clone per character: by characters (clone reused every scene)
+- Voice: each character keeps one fixed ElevenLabs voice; Veo's audio is swapped into it with Speech-to-Speech (~$0.002/sec of audio)
 - Composed scene image (Nano Banana Pro): $0.15 per scene
-- Scene clip — dialogue OR memoir narration (Kling v3 standard, audio + cloned voices): $0.154 per second
+- Scene clip — Veo 3.1 fast (two people acting + talking, native lip-sync): $0.15 per second, then swapped into our voice (~$0.002/sec)
 - **Roughly $12–15 for one finished ~75s video** (real multi-actor cinema costs more)
 
 ---

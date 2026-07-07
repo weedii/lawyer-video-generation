@@ -108,6 +108,18 @@ KLING_CREATE_VOICE_PER = 0.007
 #     fal.ai/models/fal-ai/sync-lipsync
 SYNC_LIPSYNC_PER_SEC = 0.0117
 
+# Veo 3.1 FAST image-to-video (our scene model): two people acting + talking in
+# ONE shot with native lip-sync. 720p/1080p WITH audio = $0.15/s (no audio $0.10).
+# Veo bills per whole 4s/6s/8s block, so a short line still costs its block.
+#     fal.ai/models/fal-ai/veo3.1/fast/image-to-video
+VEO_FAST_AUDIO_PER_SEC = 0.15
+
+# ElevenLabs Speech-to-Speech (voice changer): swaps Veo's invented voice for OUR
+# locked character voice while KEEPING the timing, so the lip-sync still matches.
+# $0.12 / minute of audio = $0.002 / second.
+#     elevenlabs.io/docs/api-reference/speech-to-speech
+ELEVEN_STS_PER_SEC = 0.002
+
 # --- Text + voice (SEPARATE accounts, not fal) ----------------------------
 # ElevenLabs bills by characters from your plan quota, not per-call dollars.
 # This is a rough upper-bound estimate just so a number prints.

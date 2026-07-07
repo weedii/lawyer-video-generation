@@ -1,36 +1,41 @@
-"""STAGE 2 - STEP 3: Make one cinematic CLIP per SCENE (Kling scene pipeline).
+"""STAGE 2 - STEP 3: Make one cinematic CLIP per SCENE (Veo + our-voice pipeline).
 
-NEW MODEL: instead of one talking avatar per line, we render one SHOT per scene
-where the characters act and talk TO EACH OTHER in the same room — a real short
-film. Two kinds of scene:
+The unit is a SCENE — a real short-film shot where the characters act and talk TO
+EACH OTHER in the same room. Two kinds of scene:
 
   DIALOGUE scene:
-    1. Compose ONE image with the scene's 1-2 characters together in the setting
-       (Nano Banana Pro edit, using their locked portraits as references so the
-       faces stay consistent).
-    2. Animate it with Kling v3 (image-to-video): the characters move, act, and
-       SPEAK the dialogue in OUR cloned voices (voice_ids from voice_maker.py),
-       with native lip-sync. Kling allows 2 voices per shot.
+    1. Compose ONE image with the scene's on-screen cast together in the setting
+       (Nano Banana Pro edit, using their locked portraits so faces stay the same).
+    2. Render ONE Veo 3.1 clip PER LINE: the speaker acts and says that line while
+       the others stay in frame reacting (Veo animates + speaks it in ITS OWN
+       voice, with native lip-sync). Because each clip has ONE speaker, we then
+    3. RE-VOICE it into OUR locked ElevenLabs voice with Speech-to-Speech, which
+       keeps the exact timing so the lip-sync still matches. Line clips are chained
+       (last frame -> next clip's start image) and concatenated into one scene clip.
 
   NARRATION scene (hook / bridge / cliffhanger) — MEMOIR style:
-    The lone PROTAGONIST performs the narration straight to camera in their own
-    cloned voice — first person, mouth moving, doing something (pacing a cell,
-    walking a corridor) in a fitting place. Same Kling talking shot as dialogue
-    but with ONE voice, and allowed to face the lens (dialogue never is).
+    The lone PROTAGONIST performs the narration straight to camera (first person),
+    one Veo clip, re-voiced into their own ElevenLabs voice.
+
+Why this shape: Veo gives the best two-people-in-one-shot acting + lip-sync, but
+its voice is invented and drifts. Speech-to-Speech swaps it for our consistent
+per-character voice without breaking the lips (timing preserved). Result: two
+actors in one room + our voices + consistency.
 
 Usage:
     python scene_clips.py
 
-Reads:  output/analysis.json   (characters w/ portraits + voice_ids, script scenes)
+Reads:  output/analysis.json   (characters w/ portraits + voice_id, script scenes)
 Output: output/clip_01.mp4 ...   (one per scene, in order); writes scene["clip"].
-Cost:   Kling ~$0.126-0.154/s (dialogue AND narration) + $0.15 per composed
-        scene image.
+Cost:   Veo 3.1 fast ~$0.15/s (audio) + ElevenLabs Speech-to-Speech ~$0.002/s +
+        $0.15 per composed scene image.
 """
 import os
 import sys
 import json
 import re
 import time
+import shutil
 import subprocess
 import requests
 import fal_client
@@ -41,37 +46,15 @@ import costs
 load_dotenv()
 if not os.getenv("FAL_KEY"):
     sys.exit("ERROR: FAL_KEY is empty. Open .env and paste your fal.ai key.")
+ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY")
+if not ELEVEN_KEY:
+    sys.exit("ERROR: ELEVENLABS_API_KEY is empty (needed to re-voice into our voices).")
 
 OUT_DIR = "output"
-KLING_MODEL = "fal-ai/kling-video/v3/standard/image-to-video"   # scene + dialogue
-SCENE_EDIT_MODEL = "fal-ai/nano-banana-pro/edit"      # compose chars into a scene
-KLING_MIN_SEC, KLING_MAX_SEC = 5, 15
-
-# Negative prompts for the Kling clips: things we do NOT want.
-#
-# COMMON to every clip: the dead opening — Kling likes to hold the first frame,
-# motionless, before anyone acts — plus the garbled filler sound it invents at
-# the very start (an audio version of the dead lead-in). Naming these (with the
-# "start in motion" line in the positive prompt) cuts the lead-in down;
-# assemble.py trims whatever remains.
-KLING_NEG_COMMON = (
-    "static opening, frozen first frame, motionless pause at the start, "
-    "standing still doing nothing, waiting before speaking, idle, delayed "
-    "speech, slow to start, "
-    "mumbling, muttering, garbled speech, gibberish, nonsense words, "
-    "unintelligible talking, background chatter, lip movement with no clear "
-    "words, blur, distort, low quality"   # keep the model's default quality guard
-)
-# DIALOGUE clips also ban facing the camera: the actors must talk to EACH OTHER,
-# never to the viewer. (Narration is the ONE exception — the lone protagonist
-# performs straight to camera — so it does NOT use these.)
-KLING_NEG_CAMERA = (
-    "looking at camera, staring at the camera, talking to camera, addressing "
-    "the viewer, facing the camera, eye contact with camera, "
-    "the wrong character speaking first"
-)
-KLING_NEG_DIALOGUE = KLING_NEG_CAMERA + ", " + KLING_NEG_COMMON
-KLING_NEG_NARRATION = KLING_NEG_COMMON
+VEO_MODEL = "fal-ai/veo3.1/fast/image-to-video"   # two-person scene + native lip-sync
+SCENE_EDIT_MODEL = "fal-ai/nano-banana-pro/edit"  # compose chars into one shot
+STS_MODEL = "eleven_english_sts_v2"               # ElevenLabs voice changer (keeps timing)
+VEO_RES = "720p"
 
 
 def slug(name: str) -> str:
@@ -83,6 +66,17 @@ def is_portrait(path: str) -> bool:
     return h > w
 
 
+def audio_duration(path: str) -> float:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", path],
+        capture_output=True, text=True)
+    try:
+        return float(out.stdout.strip())
+    except ValueError:
+        return 0.0
+
+
 def character_gender(c: dict) -> str:
     g = str(c.get("gender", "")).strip().lower()
     if g in ("male", "female"):
@@ -92,7 +86,7 @@ def character_gender(c: dict) -> str:
 
 
 def descriptor(c: dict) -> str:
-    """A short visual handle Kling can attach a line to, e.g. 'the older barrister'."""
+    """A short visual handle for a character, e.g. 'the older barrister'."""
     role = (c.get("role") or "").strip().lower()
     if role:
         return f"the {role}"
@@ -107,24 +101,18 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
     (Nano Banana Pro edit). Keeps their exact faces. Returns True on success.
 
     Composed VERTICALLY (people in front, room rising behind/above) so the model
-    does not rotate a wide layout sideways — the same lesson as make_scene_image.
-
-    Used for the FIRST shot of a set of people (and for cast/location changes).
-    Clip-to-clip continuity is NOT done here — Nano recomposes a new pose and
-    loses it; the main loop instead feeds the previous clip's last frame straight
-    to Kling for continuation clips.
-
-    room_ref: an existing scene image of the SAME location (used when the cast
-    changed). Keeps the room identical while placing the new people in it, so a
-    later shot in the same place doesn't look like a different building."""
+    does not rotate a wide layout sideways. room_ref keeps the SAME room when the
+    cast changes (so a later shot in the same place isn't a different building)."""
     urls = [fal_client.upload_file(p) for p in portrait_paths]
     n = len(urls)
-    # HARD constraint: only the people whose photos we pass may appear. Otherwise,
-    # if the action text names anyone else, Nano invents a random extra face
-    # (wrong person, wrong gender) and consistency breaks.
     only = (f"EXACTLY {n} " + ("person" if n == 1 else "people") +
             f" in the frame — only the {n} shown in the reference photos, and NO "
             f"other person: no third person, no bystander, no extra face, no crowd.")
+    # Eyelines: 2 people must LOOK AT EACH OTHER (not all stare the same way, as if
+    # a 4th person were off-camera). 1 person (narration) is handled by its prompt.
+    face = ("" if n < 2 else
+            f" The {n} people FACE EACH OTHER and look at one another, mid-conversation "
+            f"— NOT all looking the same direction, NOT looking at the camera.")
     if room_ref and os.path.exists(room_ref):
         urls.append(fal_client.upload_file(room_ref))   # room reference goes LAST
         prompt = (
@@ -132,7 +120,7 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
             f"those people together inside the SAME room shown in the last image — "
             f"keep that room's EXACT architecture, windows, wood panelling, "
             f"furniture, lighting and colour so it is unmistakably the identical "
-            f"location. {only} {action}. Keep each person's exact face and clothing. "
+            f"location. {only}{face} {action}. Keep each person's exact face and clothing. "
             f"{shot}. Vertical 9:16 portrait, upright: the people stand/sit in the "
             f"foreground with heads near the TOP of the frame, the room rising "
             f"behind and above them. Photorealistic. NOT rotated, NOT sideways, "
@@ -141,7 +129,7 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
     else:
         prompt = (
             f"Put these people together in ONE cinematic shot inside {setting}. "
-            f"{only} {action}. Keep their exact faces and clothing. {shot}. Vertical 9:16 "
+            f"{only}{face} {action}. Keep their exact faces and clothing. {shot}. Vertical 9:16 "
             f"portrait, upright: the people stand/sit in the foreground with heads "
             f"near the TOP of the frame, the room rising behind and above them. Moody "
             f"cinematic prestige legal-drama lighting, photorealistic. NOT rotated, "
@@ -168,135 +156,121 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
     return os.path.exists(out_path)
 
 
-# --- Kling dialogue scene --------------------------------------------------
+# --- Veo clip + re-voice ---------------------------------------------------
 
-def scene_duration(scene: dict) -> str:
-    """Pick a Kling clip length (5-15s) long enough to speak all the lines
-    (dialogue) or the whole narration (memoir beats)."""
-    words = sum(len(d["line"].split()) for d in scene.get("dialogue", []))
-    words += len(scene.get("narration", "").split())
-    secs = round(words / 2.3 + 2)          # ~2.3 words/sec of speech + a little air
-    return str(max(KLING_MIN_SEC, min(KLING_MAX_SEC, secs)))
+def veo_duration(text: str) -> str:
+    """Pick a Veo length (4s/6s/8s — Veo only allows these) for one spoken line."""
+    n = len((text or "").split())
+    secs = n / 2.5 + 1.5           # ~2.5 words/sec + a little air
+    return "4s" if secs <= 4 else "6s" if secs <= 6 else "8s"
 
 
-def build_dialogue_prompt(scene: dict, chars_by_name: dict):
-    """Turn a dialogue scene into a Kling prompt + the ordered voice_ids.
-    Each character's line is tagged with <<<voice_1>>> / <<<voice_2>>> so Kling
-    speaks it in that character's cloned voice."""
-    speakers = scene.get("characters", [])
-    onscreen = scene.get("onscreen") or speakers
-    voice_ids = []
-    marker = {}
-    for name in speakers:                       # only the <=2 speakers get voices
-        c = chars_by_name.get(name, {})
-        vid = c.get("kling_voice_id")
-        if vid:
-            voice_ids.append(vid)
-            marker[name] = f"<<<voice_{len(voice_ids)}>>>"   # 1-based, aligns with voice_ids
-        else:
-            marker[name] = ""   # no cloned voice -> Kling picks one
-    desc = {n: descriptor(chars_by_name.get(n, {})) for n in onscreen}
-
-    # Lead with a "start in motion" directive. Kling (like all image-to-video)
-    # tends to ease in from the still frame — the characters hold the opening
-    # pose, looking at the camera, for a beat before they move/talk. Putting this
-    # first (Kling weights early words most) pushes the action onto frame 1. It
-    # only REDUCES the stare; assemble.py still trims whatever's left.
-    parts = ["The scene is already in motion from the very first frame: the "
-             "characters are mid-conversation, moving and speaking immediately. "
-             "They look at and speak to EACH OTHER, facing one another like people "
-             "in a private conversation — they NEVER look at or talk to the camera, "
-             "they are not addressing the viewer",
-             scene.get("shot", "medium two-shot, slow dolly in"),
-             scene.get("action", "")]
-    body = []
-    for d in scene.get("dialogue", []):
-        n = d["character"]
-        tone = f", {d['emotion']}," if d.get("emotion") else ""
-        m = marker.get(n, "")
-        who = desc.get(n, "the person").capitalize()
-        body.append(f'{who}{tone} says: {m} "{d["line"]}"')
-    # Name anyone present but NOT speaking, so Kling keeps them in frame reacting
-    # (silent) instead of dropping them or making them talk.
-    silent = [desc[n] for n in onscreen if n not in speakers]
-    silent_note = ""
-    if silent:
-        who = " and ".join(s for s in silent)
-        silent_note = (f" Also in the shot: {who} — present and reacting in silence, "
-                       f"NOT speaking, no lip movement, but clearly visible.")
-    prompt = ". ".join(p for p in parts if p).strip(". ") + ". " + " ".join(body) + \
-        silent_note + " They are together in the same room. Moody cinematic " \
-        "prestige legal drama, photorealistic."
-    return prompt, voice_ids
+def _short_err(e) -> str:
+    """One short line from a fal error (never the whole echoed request/prompt)."""
+    s = str(e)
+    low = s.lower()
+    if "content_policy" in low or "content checker" in low or "flagged" in low:
+        return "blocked by Veo's content filter (wording too explicit)"
+    return s[:140]
 
 
-def build_narration_prompt(scene: dict, chars_by_name: dict):
-    """A memoir NARRATION beat: the lone protagonist performs straight TO CAMERA —
-    first person, telling us the story while doing something (pacing a cell,
-    walking a corridor), mouth moving, in their own cloned voice. This is the ONE
-    place a character looks at the lens; dialogue scenes never do.
-    Returns (prompt, voice_ids) — a single voice, the protagonist's."""
-    names = scene.get("characters", [])
-    name = names[0] if names else None
-    c = chars_by_name.get(name, {})
-    voice_ids = []
-    marker = ""
-    vid = c.get("kling_voice_id")
-    if vid:
-        voice_ids.append(vid)
-        marker = "<<<voice_1>>>"
-    who = descriptor(c).capitalize() if c else "The narrator"
-
-    parts = ["The scene is already in motion from the very first frame. ONE person "
-             "is ALONE in the shot, telling their own story straight to us: they "
-             "look directly INTO the camera lens and address the viewer, like a "
-             "first-person confession or memoir. Nobody else is present",
-             scene.get("shot", "slow push-in on a lone figure"),
-             scene.get("action", "")]
-    line = scene.get("narration", "")
-    body = f'{who} looks into the camera and says: {marker} "{line}"'
-    prompt = ". ".join(p for p in parts if p).strip(". ") + ". " + body + \
-        " Moody cinematic prestige legal drama, photorealistic."
-    return prompt, voice_ids
-
-
-def make_kling_scene(image_path: str, prompt: str, voice_ids: list,
-                     duration: str, out_path: str,
-                     negative_prompt: str = KLING_NEG_DIALOGUE) -> float:
-    """Animate the composed scene image into a talking clip with Kling v3.
-    Returns the duration in seconds (for cost). Retries on transient fal errors.
-    negative_prompt defaults to the dialogue one (no facing camera); narration
-    passes KLING_NEG_NARRATION so the lone narrator CAN look at us."""
+def make_veo_clip(image_path: str, prompt: str, duration: str, out_path: str) -> float:
+    """Animate the start image into a talking clip with Veo 3.1 fast (its own voice
+    + native lip-sync). Returns the billed seconds, or 0.0 (and writes no file) if
+    Veo could not make it — so one bad line never crashes the whole run. Retries
+    only transient errors; a content-filter block is permanent for that wording, so
+    we stop retrying it (auto_fix already had its one shot)."""
     image_url = fal_client.upload_file(image_path)
-    args = {"image_url": image_url, "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "duration": duration, "generate_audio": True}
-    if voice_ids:
-        args["voice_ids"] = voice_ids     # our cloned per-character voices
-    last_err = None
     for attempt in range(1, 4):
         try:
-            r = fal_client.subscribe(KLING_MODEL, arguments=args, with_logs=False)
+            r = fal_client.subscribe(
+                VEO_MODEL,
+                arguments={"prompt": prompt, "image_url": image_url,
+                           "duration": duration, "resolution": VEO_RES,
+                           "generate_audio": True, "aspect_ratio": "9:16",
+                           "auto_fix": True},   # let Veo soften a borderline prompt itself
+                with_logs=False,
+            )
             url = r["video"]["url"] if isinstance(r.get("video"), dict) else r["video"]
             with open(out_path, "wb") as f:
                 f.write(requests.get(url).content)
-            return float(duration)
+            return float(int(duration[:-1]))
         except Exception as e:
-            last_err = e
-            print(f"    kling attempt {attempt} failed ({e}); retrying in 5s ...")
+            msg = _short_err(e)
+            print(f"    veo attempt {attempt} failed: {msg}")
+            if "content filter" in msg:          # same wording will fail again — give up
+                return 0.0
             time.sleep(5)
-    raise last_err
+    return 0.0
 
 
-# --- Scene continuity -------------------------------------------------------
+def revoice(clip_path: str, voice_id: str, out_path: str) -> float:
+    """Swap the clip's (Veo-invented) voice for OUR ElevenLabs voice with
+    Speech-to-Speech, which preserves the original timing so the lip-sync still
+    matches. Muxes the new voice back onto the SAME video. Returns the audio
+    seconds (for cost). On any failure, keeps Veo's original voice so a line is
+    never lost."""
+    if not voice_id:
+        shutil.copyfile(clip_path, out_path)
+        return 0.0
+    aud = clip_path + ".aud.mp3"
+    swap = clip_path + ".swap.mp3"
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", clip_path, "-vn",
+                        "-c:a", "libmp3lame", "-q:a", "2", aud],
+                       check=True, capture_output=True)
+        with open(aud, "rb") as f:
+            r = requests.post(
+                f"https://api.elevenlabs.io/v1/speech-to-speech/{voice_id}",
+                headers={"xi-api-key": ELEVEN_KEY},
+                data={"model_id": STS_MODEL, "remove_background_noise": "true"},
+                files={"audio": ("veo.mp3", f, "audio/mpeg")},
+                timeout=180,
+            )
+        if r.status_code != 200:
+            print(f"    revoice failed {r.status_code}: {r.text[:120]}; keeping Veo voice")
+            shutil.copyfile(clip_path, out_path)
+            return 0.0
+        with open(swap, "wb") as f:
+            f.write(r.content)
+        # Put the new voice on the video; -shortest matches the (equal-length) pair.
+        subprocess.run(["ffmpeg", "-y", "-i", clip_path, "-i", swap,
+                        "-c:v", "copy", "-c:a", "aac",
+                        "-map", "0:v:0", "-map", "1:a:0", "-shortest", out_path],
+                       check=True, capture_output=True)
+        return audio_duration(swap)
+    except Exception as e:
+        print(f"    revoice error ({e}); keeping Veo voice")
+        shutil.copyfile(clip_path, out_path)
+        return 0.0
+    finally:
+        for f in (aud, swap):
+            if os.path.exists(f):
+                os.remove(f)
+
+
+def concat_clips(paths: list, out_path: str):
+    """Join a scene's per-line clips into one scene clip (they share Veo's size +
+    codec, so a stream copy works; re-encode as a fallback)."""
+    if len(paths) == 1:
+        shutil.copyfile(paths[0], out_path)
+        return
+    listf = out_path + ".txt"
+    with open(listf, "w") as f:
+        for p in paths:
+            f.write(f"file '{os.path.abspath(p)}'\n")
+    r = subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listf,
+                        "-c", "copy", out_path], capture_output=True)
+    if r.returncode != 0 or not os.path.exists(out_path):
+        subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listf,
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                        out_path], check=True, capture_output=True)
+    os.remove(listf)
+
 
 def extract_last_frame(clip_path: str, out_path: str) -> bool:
-    """Save a still of a clip's ENDING as a PNG, for scene continuity.
-
-    We grab ~0.2s before the very end (not the literal last frame, which can be
-    motion-blurred or half-decoded) so we get a clean picture of where the
-    characters ended up. The next clip of the same scene composes from this so
-    the action continues instead of restarting. Free (local ffmpeg)."""
+    """Save a still of a clip's ENDING (~0.2s before the end so it's clean), used
+    to start the next line's clip so the action carries forward."""
     try:
         subprocess.run([
             "ffmpeg", "-y", "-sseof", "-0.2", "-i", clip_path,
@@ -306,6 +280,45 @@ def extract_last_frame(clip_path: str, out_path: str) -> bool:
     except Exception as e:
         print(f"    (could not grab last frame for continuity: {e})")
         return False
+
+
+# --- Prompts ---------------------------------------------------------------
+
+def line_prompt(sc: dict, speaker_c: dict, listener_descs: list,
+                line: str, emotion: str) -> str:
+    """Veo prompt for ONE dialogue line: the speaker acts + says it; the others
+    stay in frame reacting silently; nobody faces the camera."""
+    who = descriptor(speaker_c).capitalize()
+    tone = f", {emotion.strip()}," if emotion else ""
+    # CRITICAL: exactly ONE voice in the clip. If the other person also talks,
+    # the whole-clip voice-swap turns their line into the speaker's voice (a man
+    # ends up speaking in the woman's voice). So force the listener SILENT.
+    listen = ""
+    if listener_descs:
+        listen = (f" {' and '.join(listener_descs)} listens in silence, mouth "
+                  f"closed, and does not speak — reacting only with their face.")
+    return (
+        "The scene is already in motion from the very first frame. "
+        f"{sc.get('shot', 'medium two-shot, slow push-in')}. "
+        f"Only {who} speaks{tone}: looking at the other person, they say just "
+        f"these words: \"{line}\".{listen} They face one another and never look "
+        "at or speak to the camera. Moody cinematic prestige legal drama, "
+        "photorealistic."
+    )
+
+
+def narration_prompt(sc: dict, lead_c: dict) -> str:
+    """Veo prompt for a memoir narration beat: the lone protagonist performs it
+    straight to camera, first person."""
+    who = descriptor(lead_c).capitalize() if lead_c else "The narrator"
+    return (
+        "The scene is already in motion from the very first frame. ONE person is "
+        "ALONE in the shot. "
+        f"{sc.get('shot', 'slow push-in on a lone figure')}. {sc.get('action', '')}. "
+        f"{who} looks directly INTO the camera and tells us their own story, first "
+        f"person, like a memoir confession: \"{sc.get('narration', '')}\". Nobody "
+        "else is present. Moody cinematic prestige legal drama, photorealistic."
+    )
 
 
 def main():
@@ -322,25 +335,14 @@ def main():
     chars_by_name = {c["fictional_name"]: c for c in data.get("characters", [])}
     setting = script.get("setting", "a law office")
 
-    # The lead (first named) is the memoir narrator; main_names[0] is the fallback
-    # if a narration scene somehow has no valid character on it.
     named = [c for c in data.get("characters", []) if not c.get("anonymous")]
     main_names = [c["fictional_name"] for c in named[:2] if c.get("file")]
 
-    kling_voice_seconds = 0.0  # Kling billed with voice control ($0.154/s)
-    kling_plain_seconds = 0.0  # Kling with no cloned voice ($0.126/s)
-    scene_images = 0            # composed images we actually paid for
-    # SCENE CONTINUITY. The FIRST time a set of people appears in a place we
-    # compose a portrait-anchored scene image. For the NEXT clip of the same
-    # people in the same place, we start Kling STRAIGHT from the previous clip's
-    # last frame (no recompose) so the action carries forward — someone who stood
-    # up stays standing — instead of resetting and replaying. The faces in that
-    # frame are already correct, so continuity costs nothing and doesn't drift.
-    continuity_frame = {}      # (sorted names, setting) -> previous clip's last-frame PNG
-    # When the CAST changes but the LOCATION is the same, there's no continuity to
-    # carry, so we anchor to the first image shot in that location instead, so the
-    # room stays identical rather than the model inventing a different courtroom.
-    location_ref = {}          # setting (location only) -> first image made there
+    veo_seconds = 0.0       # Veo video seconds (billed $0.15/s w/ audio)
+    sts_seconds = 0.0       # ElevenLabs Speech-to-Speech seconds
+    scene_images = 0        # composed images we paid for
+    location_ref = {}       # setting -> first image made there (keep the room identical)
+    compose_cache = {}      # (same people, same place) -> reuse that image (no re-pay)
     print(f"Rendering {len(scenes)} scenes ...")
 
     for i, sc in enumerate(scenes, 1):
@@ -348,111 +350,120 @@ def main():
         clip_path = os.path.join(OUT_DIR, clip_name)
         sc_setting = sc.get("setting", setting) or setting
 
-        # Who is IN this shot. NARRATION = the lone protagonist performing to
-        # camera (a solo shot — one person only). DIALOGUE = the scene's speakers.
+        # Who is IN this shot.
         if sc.get("type") == "narration":
             names = [n for n in sc.get("characters", [])
                      if chars_by_name.get(n, {}).get("file")]
             if not names and main_names:
-                names = [main_names[0]]          # fallback: the lead
+                names = [main_names[0]]
             if not names:
                 print(f"  [{i}] NARRATION skipped: no lead portrait.")
                 continue
-            names = names[:1]                    # narration is solo
+            names = names[:1]
         else:
-            # Compose from the FULL on-screen cast (speakers + silent reactors), so
-            # everyone present stays in frame — only the <=2 speakers get voices.
-            onscreen = sc.get("onscreen") or sc.get("characters", [])
-            names = [n for n in onscreen if chars_by_name.get(n, {}).get("file")]
+            # ONLY the 2 speakers go in the frame. Silent third wheels made the
+            # cast all stare the same way (as if at a 4th person off-camera) and
+            # doubled the cost by re-composing the same group every scene. A third
+            # person who matters gets their OWN scene.
+            names = [n for n in sc.get("characters", [])
+                     if chars_by_name.get(n, {}).get("file")]
             if not names:
                 print(f"  [{i}] DIALOGUE skipped: no character images.")
                 continue
-        portraits = [os.path.join(OUT_DIR, chars_by_name[n]["file"])
-                     for n in names if chars_by_name.get(n, {}).get("file")]
+        portraits = [os.path.join(OUT_DIR, chars_by_name[n]["file"]) for n in names]
 
-        # Choose this clip's START IMAGE.
         loc_key = sc_setting.strip().lower()
-        key = (tuple(sorted(names)), loc_key)
-        cont_ref = continuity_frame.get(key) if sc.get("type") != "narration" else None
 
-        if cont_ref:
-            # CONTINUE the shot: start this clip STRAIGHT from the previous clip's
-            # last frame (no Nano recompose). Nano is a composer — given the
-            # portraits it rebuilds a brand-new pose/framing and throws the
-            # continuity away (we saw it do exactly that). Feeding the real last
-            # frame straight to Kling is the only thing that actually continues
-            # the action. The faces in that frame are already correct (the first
-            # clip of this pair was portrait-anchored), so continuity is free.
-            img_path = cont_ref
-            print(f"  [{i}] [{' + '.join(names)}] continues straight from the "
-                  f"previous clip's last frame")
+        # Compose a CLEAN two-shot (both people neutral, mouths closed). We do NOT
+        # reuse a previous clip's last frame — that frame is mid-talk, which makes
+        # Veo continue the wrong speaker and breaks the one-speaker-per-clip rule the
+        # voice-swap relies on. But if the SAME people were already composed in the
+        # SAME place, reuse that image instead of paying to re-make a near-identical
+        # one. And even for a new pair, location_ref keeps the room identical.
+        cache_key = (frozenset(names), loc_key)
+        start_img = compose_cache.get(cache_key)
+        if start_img and os.path.exists(start_img):
+            print(f"    (reusing scene image — same people, same place, $0 saved)")
         else:
-            # First time these people appear here (or the cast/location changed):
-            # compose a fresh portrait-anchored scene image. If we've already shot
-            # this room, anchor to it so it stays the identical location.
-            img_path = os.path.join(OUT_DIR, f"scene_{i:02d}.png")
+            start_img = os.path.join(OUT_DIR, f"scene_{i:02d}.png")
             room_ref = location_ref.get(loc_key)
-            if room_ref:
-                print(f"  [{i}] composing [{' + '.join(names)}] in {sc_setting} "
-                      f"(anchored to the established room)")
             if compose_scene_image(portraits, sc_setting, sc.get("shot", ""),
-                                   sc.get("action", ""), img_path, room_ref=room_ref):
+                                   sc.get("action", ""), start_img, room_ref=room_ref):
                 scene_images += 1
-                location_ref.setdefault(loc_key, img_path)   # first shot here = the room anchor
+                location_ref.setdefault(loc_key, start_img)
+                compose_cache[cache_key] = start_img
 
+        # --- NARRATION: one Veo clip, protagonist to camera, then re-voice ---
         if sc.get("type") == "narration":
-            # The lone protagonist PERFORMS the narration straight to camera, in
-            # their own cloned voice (memoir style) — a Kling talking shot, one
-            # voice, allowed to face the lens (KLING_NEG_NARRATION).
-            prompt, voice_ids = build_narration_prompt(sc, chars_by_name)
-            dur = scene_duration(sc)
-            secs = make_kling_scene(img_path, prompt, voice_ids, dur, clip_path,
-                                    negative_prompt=KLING_NEG_NARRATION)
-            if voice_ids:
-                kling_voice_seconds += secs
-            else:
-                kling_plain_seconds += secs
-            print(f"  [{i}] NARRATION [{names[0]}] -> {clip_name} "
-                  f"(Kling {secs:.0f}s, to camera, {len(voice_ids)} cloned voice)")
-        else:
-            # Kling animates the scene image into a talking dialogue shot.
-            prompt, voice_ids = build_dialogue_prompt(sc, chars_by_name)
-            dur = scene_duration(sc)
-            secs = make_kling_scene(img_path, prompt, voice_ids, dur, clip_path)
-            # Bill the right Kling tier: voice control if we passed cloned voices.
-            if voice_ids:
-                kling_voice_seconds += secs
-            else:
-                kling_plain_seconds += secs
-            # Remember where this clip ENDED, so the next clip of the same scene
-            # (same people, same place) continues from here instead of resetting.
-            end_frame = os.path.join(OUT_DIR, f"_end_{i:02d}.png")
-            if extract_last_frame(clip_path, end_frame):
-                continuity_frame[key] = end_frame
-            print(f"  [{i}] DIALOGUE [{' + '.join(names)}] -> {clip_name} "
-                  f"(Kling {secs:.0f}s, {len(voice_ids)} cloned voices)")
+            lead_c = chars_by_name.get(names[0], {})
+            raw = os.path.join(OUT_DIR, f"_raw_{i:02d}.mp4")
+            secs = make_veo_clip(start_img, narration_prompt(sc, lead_c),
+                                 veo_duration(sc.get("narration", "")), raw)
+            if secs == 0.0 or not os.path.exists(raw):
+                print(f"  [{i}] NARRATION skipped: Veo could not generate this beat.")
+                continue
+            veo_seconds += secs
+            sts_seconds += revoice(raw, lead_c.get("voice_id", ""), clip_path)
+            if os.path.exists(raw):
+                os.remove(raw)
+            sc["clip"] = clip_name
+            print(f"  [{i}] NARRATION [{names[0]}] -> {clip_name} (Veo {secs:.0f}s, re-voiced)")
+            continue
 
+        # --- DIALOGUE: one Veo clip PER LINE, chained, then concatenated ---
+        speakers = sc.get("characters", [])
+        line_clips = []
+        # Every line starts from the SAME clean two-shot (both neutral, mouths
+        # closed) — NOT the previous clip's mid-talk last frame. Starting mid-talk
+        # made Veo keep the previous speaker going (their audio then got swapped
+        # into the next speaker's voice) and garble the new line. A clean start per
+        # line keeps each clip to ONE speaker so the voice-swap is correct.
+        for j, d in enumerate(sc.get("dialogue", []), 1):
+            spk = d.get("character")
+            spk_c = chars_by_name.get(spk, {})
+            listener_descs = [descriptor(chars_by_name[n]) for n in names if n != spk]
+            raw = os.path.join(OUT_DIR, f"_raw_{i:02d}_{j:02d}.mp4")
+            line_out = os.path.join(OUT_DIR, f"_line_{i:02d}_{j:02d}.mp4")
+            secs = make_veo_clip(
+                start_img, line_prompt(sc, spk_c, listener_descs, d["line"], d.get("emotion", "")),
+                veo_duration(d["line"]), raw)
+            if secs == 0.0 or not os.path.exists(raw):
+                print(f"    line {j} skipped (Veo could not generate it).")
+                continue
+            veo_seconds += secs
+            sts_seconds += revoice(raw, spk_c.get("voice_id", ""), line_out)
+            if os.path.exists(raw):
+                os.remove(raw)
+            line_clips.append(line_out)
+
+        if not line_clips:
+            print(f"  [{i}] DIALOGUE skipped: no lines.")
+            continue
+        concat_clips(line_clips, clip_path)
+        for lc in line_clips:                       # tidy the per-line temp clips
+            if os.path.exists(lc):
+                os.remove(lc)
         sc["clip"] = clip_name
+        print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {clip_name} "
+              f"({len(line_clips)} lines, Veo + re-voiced)")
 
-    # --- Cost: Kling clips (dialogue + narration) + composed scene images ---
-    # Kling billed per tier: voice-control seconds ($0.154) vs plain-audio ($0.126).
-    kling_seconds = kling_voice_seconds + kling_plain_seconds
-    kling_cost = (kling_voice_seconds * costs.KLING_V3_STD_VOICE_PER_SEC
-                  + kling_plain_seconds * costs.KLING_V3_STD_AUDIO_PER_SEC)
+    # --- Cost: Veo clips + Speech-to-Speech re-voicing + composed images ---
+    veo_cost = veo_seconds * costs.VEO_FAST_AUDIO_PER_SEC
+    sts_cost = sts_seconds * costs.ELEVEN_STS_PER_SEC
     image_cost = scene_images * costs.NANO_BANANA_PRO_EDIT_PER_IMAGE
-    clip_cost = kling_cost + image_cost
+    clip_cost = veo_cost + sts_cost + image_cost
     costs.record(data, "clips",
-                 f"Scenes - Kling v3 ({kling_seconds:.0f}s, dialogue + narration) "
-                 f"+ {scene_images} scene images",
+                 f"Scenes - Veo 3.1 fast ({veo_seconds:.0f}s) + ElevenLabs voice swap "
+                 f"({sts_seconds:.0f}s) + {scene_images} scene images",
                  clip_cost)
 
     with open(analysis_path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
     print(f"\nUpdated output/analysis.json with the scene clips. "
-          f"({scene_images} scene images composed, continuity-chained)")
-    costs.show(f"{len(scenes)} scenes (Kling {kling_seconds:.0f}s + "
-               f"{scene_images} images)", clip_cost)
+          f"({scene_images} scene images composed)")
+    costs.show(f"{len(scenes)} scenes (Veo {veo_seconds:.0f}s + voice swap "
+               f"{sts_seconds:.0f}s + {scene_images} images)", clip_cost)
 
 
 if __name__ == "__main__":

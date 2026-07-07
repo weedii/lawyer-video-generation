@@ -132,6 +132,18 @@ STRUCTURE (a real beginning, middle and end) — 5 to 7 SCENES total:
    alone, first person, a strong button.
 
 HARD RULES:
+- PLATFORM-SAFE CONTENT (critical — the video generator REJECTS explicit prompts
+  and the clip fails to render). NEVER write sexually explicit words, graphic
+  descriptions, slurs or crude anatomical language, even when the real story is
+  about sexual misconduct or harassment. Convey it through IMPLICATION and reaction
+  instead: euphemism ("the messages", "inappropriate remarks", "over the line"),
+  an uncomfortable silence, a leer, someone recoiling. Suggestive and tense is
+  fine; graphic is not. Keep every line clean enough for a mainstream feed.
+- SHOW ONLY THE TWO SPEAKERS IN A DIALOGUE SHOT. The camera frames just the two
+  people who talk in this scene — do NOT stage a third person in the frame and do
+  NOT ask for a "three-shot". The "shot" and "action" must describe ONLY those two.
+  Anyone else who was present gets their OWN separate scene, never a silent extra
+  standing in this one.
 - A NARRATION scene has EXACTLY ONE person — the protagonist, ALONE. Its "shot" and
   "action" must describe ONLY the protagonist (pacing, sitting, staring, walking) in
   an EMPTY place; NEVER put another character, bystander, passer-by, background
@@ -140,21 +152,17 @@ HARD RULES:
 - KEEP NARRATION SHORT AND PUNCHY: each narration beat is ONE or at most TWO short
   sentences (about 18 words / ~7 seconds MAX). It's a sharp hook or button, not a
   paragraph. Cut every spare word — no rambling, no lists, no repeated ideas.
-- SPEAKERS vs ON-SCREEN. Two separate lists per dialogue scene:
+- SPEAKERS / ON-SCREEN. A dialogue scene shows EXACTLY its speakers and no one else:
     * "characters" = the SPEAKERS — AT MOST TWO (the video model allows only two
       voices per shot). These are the two who actually talk in this beat.
-    * "onscreen" = EVERYONE physically present in the shot (2 to 4 real cast
-      members), INCLUDING the two speakers. The extra people are really there —
-      they REACT silently (they do not speak in this clip), but we SEE them.
-  Use "onscreen" to keep people PRESENT instead of swapping them out. Example: on
-  the train, if two junior colleagues were both there, put BOTH in "onscreen" and
-  let one of them + the lead speak — the other stays visible, reacting. That way we
-  never cut to a "different person"; everyone who was in that moment stays in frame.
-- The "shot" and "action" text may describe ALL the people in "onscreen" (the two
-  speakers AND the silent reactors) and how they sit/stand together — but NEVER
-  mention, include, or hint at anyone who is NOT in "onscreen": no invented
-  bystander, no "colleague nearby" you didn't list, no crowd. Everyone named must be
-  a real cast member you put in "onscreen" (each has a real locked photo).
+    * "onscreen" = the SAME two speakers (copy them). Do NOT add extra silent people
+      to the frame — a third face made the cast all stare past each other and broke
+      consistency. If another person was really there, give THEM their own separate
+      scene with one of the leads; never park them silently in this shot.
+- The "shot" and "action" text must describe ONLY the two speakers and how they
+  sit/stand/face each other — NEVER mention or hint at anyone else: no third person,
+  no "colleague nearby", no bystander, no crowd. Both people named must be real cast
+  members with a locked photo.
 - Each dialogue scene has 2 to 4 short lines total, alternating between the two
   characters so they actually talk to each other.
 - Every DIALOGUE line must reference a CONCRETE fact from the story (a real event,
