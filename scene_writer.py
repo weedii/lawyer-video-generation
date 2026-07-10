@@ -208,6 +208,9 @@ FOR EACH SCENE also give:
   courthouse corridor toward us") — mention ONLY the protagonist.
 - For DIALOGUE lines, an "emotion": one delivery cue (weary, smug, panicked,
   cold, defensive, contemptuous, ...).
+- For DIALOGUE lines, also a short "reaction": how the OTHER person (the listener)
+  reacts to this line WITHOUT speaking — a face-only beat we cut to (e.g. "jaw
+  tightens", "looks away, stung", "a slow, disbelieving blink"). 2-5 words.
 
 Return ONLY valid JSON with exactly this shape:
 {
@@ -215,7 +218,7 @@ Return ONLY valid JSON with exactly this shape:
   "setting": "one line: the real place where this drama happens",
   "scenes": [
     {"type": "narration", "beat": "intro", "setting": "a fitting place the story put the protagonist (e.g. a holding cell)", "shot": "shot + camera on the lone protagonist", "action": "what the protagonist ALONE physically does while speaking to us (paces, sits, stares out)", "characters": ["Exact Protagonist Name"], "narration": "first-person narration the protagonist speaks to camera", "dialogue": []},
-    {"type": "dialogue", "beat": "setup", "setting": "the real place", "shot": "shot + camera", "action": "blocking for EVERYONE onscreen: the 2 speakers + any silent reactors and what they do", "onscreen": ["Exact Name A", "Exact Name B", "Exact Name C (present, silent)"], "characters": ["Exact Name A", "Exact Name B"], "narration": "", "dialogue": [{"character": "Exact Name A", "line": "what is said", "emotion": "cue"}, {"character": "Exact Name B", "line": "reply", "emotion": "cue"}]}
+    {"type": "dialogue", "beat": "setup", "setting": "the real place", "shot": "shot + camera", "action": "blocking for EVERYONE onscreen: the 2 speakers + any silent reactors and what they do", "onscreen": ["Exact Name A", "Exact Name B", "Exact Name C (present, silent)"], "characters": ["Exact Name A", "Exact Name B"], "narration": "", "dialogue": [{"character": "Exact Name A", "line": "what is said", "emotion": "cue", "reaction": "how B silently reacts"}, {"character": "Exact Name B", "line": "reply", "emotion": "cue", "reaction": "how A silently reacts"}]}
   ]
 }
 """
@@ -264,6 +267,7 @@ def clean_scenes(script: dict, valid_names: list = None, lead: str = None) -> di
                     "character": d.get("character", ""),
                     "line": d["line"],
                     "emotion": d.get("emotion", ""),
+                    "reaction": d.get("reaction", ""),
                 }
                 for d in sc.get("dialogue", [])
                 if isinstance(d, dict) and d.get("line") and d.get("character")

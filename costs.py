@@ -120,6 +120,15 @@ VEO_FAST_AUDIO_PER_SEC = 0.15
 #     elevenlabs.io/docs/api-reference/speech-to-speech
 ELEVEN_STS_PER_SEC = 0.002
 
+# ElevenLabs Sound-Effects (text -> sound). The EDITOR lays one continuous,
+# seamlessly-looping "ambient bed" (room tone) per location UNDER the whole scene,
+# so the audio never drops to silence at a cut — the single biggest trick for
+# hiding the seams between separately-generated clips. We generate ONE short loop
+# (~15s) per unique location and loop it to length, so the real spend is tiny.
+# Billed at $0.12 / minute of generated audio = $0.002 / second.
+#     elevenlabs.io/docs/api-reference/text-to-sound-effects/convert
+ELEVEN_SFX_PER_SEC = 0.002
+
 # --- Text + voice (SEPARATE accounts, not fal) ----------------------------
 # ElevenLabs bills by characters from your plan quota, not per-call dollars.
 # This is a rough upper-bound estimate just so a number prints.
