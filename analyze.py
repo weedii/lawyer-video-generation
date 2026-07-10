@@ -132,6 +132,39 @@ def find_real_names(client, story: dict) -> tuple[list[str], float]:
     return names, cost
 
 
+# Junk the name-finder produces when it splits ORG names and anonymised labels into
+# single words: "Bar Standards Board" -> Bar/Standards/Board, "Person A" -> Person/A.
+# These are ordinary words, not real personal names — but banned as names they match
+# almost any sentence ("a", "bar"), so the leak-check flags a false "leak" every time
+# and burns a GPT retry. We drop them and keep only distinctive name words.
+NON_NAME_WORDS = frozenset({
+    "a", "b", "c", "an", "the", "and", "of", "for", "to", "in", "at", "on",
+    "person", "people", "bar", "standards", "board", "service", "services",
+    "police", "tribunal", "tribunals", "adjudication", "authority", "council",
+    "court", "courts", "chambers", "association", "society", "regulation",
+    "regulatory", "commission", "office", "department", "force", "constabulary",
+    "law", "legal", "firm", "company", "limited", "ltd", "llp", "group", "unit",
+    "team", "panel", "committee", "solicitors", "barristers",
+})
+
+
+def clean_banned(names: list[str]) -> list[str]:
+    """Keep only distinctive real-name words worth banning. Drop initials/short
+    tokens ("A", "B") and the common institution words above, which otherwise cause
+    endless false 'leaked name' retries. De-dupes too (the finder repeats words)."""
+    clean, seen = [], set()
+    for n in names:
+        w = n.strip()
+        low = w.lower()
+        if len(low) <= 2 or low in NON_NAME_WORDS or not w[:1].isalpha():
+            continue
+        if low in seen:
+            continue
+        seen.add(low)
+        clean.append(w)
+    return clean
+
+
 def label_anonymous_by_role(result: dict) -> dict:
     """Hidden-identity people are shown by their ROLE, not a personal name (they
     still get a real face — only the NAME is the role). The model fills 'role'
@@ -174,8 +207,10 @@ def analyze(story: dict) -> tuple[dict, float]:
     client = OpenAI(api_key=KEY, timeout=45.0, max_retries=3)
     total_cost = 0.0
 
-    # Step 1: find the real names so we can ban them explicitly.
+    # Step 1: find the real names so we can ban them explicitly, then strip the junk
+    # (initials, common institution words) that would trigger false leak retries.
     banned, c = find_real_names(client, story)
+    banned = clean_banned(banned)
     total_cost += c
     print(f"Real names to replace: {', '.join(banned) if banned else '(none)'}")
 

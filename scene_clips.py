@@ -63,16 +63,21 @@ SCENE_EDIT_MODEL = "fal-ai/nano-banana-pro/edit"  # compose chars into one shot
 STS_MODEL = "eleven_english_sts_v2"               # ElevenLabs voice changer (keeps timing)
 VEO_RES = "720p"
 
-# --- Coverage + reactions (make dialogue cut like a real film) --------------
-# COVERAGE: instead of one static two-shot per scene, we compose a WIDE
-# establishing two-shot + a close-up SINGLE of each speaker, and render each LINE
-# from the speaker's single. Consecutive lines then cut A-single <-> B-single =
-# real shot/reverse-shot instead of a frozen two-shot with a jump every line.
-# REACTIONS: between lines we cut to a short SILENT clip of the LISTENER reacting,
-# so the conversation breathes (research: the best short dramas are ~half silent
-# reactions) and the cut to the next speaker is hidden behind the reaction.
-COVERAGE = True           # compose singles + establishing wide (shot/reverse-shot)
-REACTIONS = True          # insert silent listener reaction cutaways between lines
+# --- Coverage + reactions (DISABLED — see note) -----------------------------
+# The IDEA: COVERAGE = compose a WIDE two-shot + a close-up SINGLE of each speaker
+# and render each line from the speaker's single, so lines cut shot/reverse-shot;
+# REACTIONS = cut to a short silent listener clip between lines.
+#
+# WHY THEY ARE OFF: a close-up shows almost no room, so Nano IGNORES the "keep this
+# location" reference and reinvents the background (and sometimes drifts the face)
+# — the speaker's close-up landed in a different place (and wrong look) than the
+# wide. That broke consistency, so we render dialogue from the ONE consistent
+# two-shot instead and get the smoothness from the EDITOR (continuous sound bed +
+# grade + trimmed pauses). The code below stays, behind these flags, so we can
+# re-enable it once we have a close-up method that actually holds the location
+# (e.g. a real crop of the wide, or a start+end-frame model).
+COVERAGE = False          # compose singles + establishing wide (shot/reverse-shot)
+REACTIONS = False         # insert silent listener reaction cutaways between lines
 ESTABLISH_SEC = 2.5       # length of the FREE still-zoom establishing beat ($0, no Veo)
 REACTION_DUR = "4s"       # Veo's shortest block; the editor caps silent beats short
 
@@ -364,6 +369,40 @@ def compose_coverage(names: list, chars_by_name: dict, setting: str,
     return angles, n_new
 
 
+def crop_single(wide_path: str, side: str, out_path: str) -> bool:
+    """Cut a SINGLE-person shot out of the composed wide two-shot with pure ffmpeg
+    (no AI, so nothing can drift): zoom into the speaker's HALF so only ONE person
+    is in frame, keeping the REAL background from the wide. side = 'left'/'right'.
+    This is what guarantees Veo animates the CORRECT person in the CORRECT place —
+    with two faces in a two-shot Veo sometimes lip-syncs the wrong one; here there
+    is only one face to animate. Keeps 9:16 (crops a 1/ZOOM window of the same
+    aspect) and biases DOWN to where seated faces sit."""
+    Z = 1.6
+    x = "0" if side == "left" else f"iw-iw/{Z}"
+    vf = f"crop=iw/{Z}:ih/{Z}:{x}:ih-ih/{Z},scale=1080:1920"
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", wide_path, "-vf", vf,
+                        "-frames:v", "1", out_path], check=True, capture_output=True)
+        return os.path.exists(out_path)
+    except Exception as e:
+        print(f"    crop single failed ({e})")
+        return False
+
+
+def two_shot_shot(names: list, chars_by_name: dict, base_shot: str) -> str:
+    """Build the wide-two-shot camera line with FORCED left/right positions, so we
+    know which side to crop for each speaker. First cast member = LEFT, second =
+    RIGHT. Keeps the model from placing them in a random order."""
+    left = descriptor(chars_by_name.get(names[0], {}))
+    parts = [f"medium two-shot, {left} seated on the LEFT"]
+    if len(names) > 1:
+        parts[0] += f", {descriptor(chars_by_name[names[1]])} seated on the RIGHT"
+    parts[0] += ", facing each other across a table"
+    if base_shot:
+        parts.append(base_shot)
+    return ". ".join(parts)
+
+
 def still_to_clip(image_path: str, out_path: str, seconds: float = ESTABLISH_SEC) -> bool:
     """Make a short SILENT establishing clip from a still image with a slow push-in
     (Ken Burns) — no Veo, so it costs $0. A silent stereo track is added so every
@@ -413,6 +452,20 @@ def reaction_prompt(sc: dict, listener_c: dict, cue: str = "") -> str:
 
 
 # --- Prompts ---------------------------------------------------------------
+
+def single_line_prompt(sc: dict, speaker_c: dict, line: str, emotion: str) -> str:
+    """Veo prompt for a line rendered from a CROPPED SINGLE (only the speaker is in
+    frame). They talk to the other person just OFF-camera to the side — not to the
+    lens — so we get one correct mouth moving and no wrong-person lip-sync."""
+    who = descriptor(speaker_c).capitalize()
+    tone = f", {emotion.strip()}," if emotion else ""
+    return ("The scene is already in motion from the very first frame. ONE person is "
+            f"in frame. {who}{tone} looks toward the other person just off-camera to "
+            f"the side — NOT at the camera — and says these exact words: \"{line}\". "
+            "Only this person's mouth moves to these words, with natural expression and "
+            f"small head movement. {sc.get('shot', 'tight medium shot')}. Moody "
+            "cinematic prestige legal drama, photorealistic.")
+
 
 def line_prompt(sc: dict, speaker_c: dict, listener_descs: list,
                 line: str, emotion: str) -> str:
@@ -513,9 +566,16 @@ def main():
         amb_file = ambient_by_loc.get(loc_key)
         if amb_file is None:
             amb_name = f"amb_{slug(loc_key)[:40] or 'room'}.mp3"
-            secs = make_ambient(sc_setting, os.path.join(OUT_DIR, amb_name))
-            amb_file = amb_name if secs > 0 else ""
-            ambient_seconds += secs
+            amb_path = os.path.join(OUT_DIR, amb_name)
+            # Resume guard: if a previous run already made this room's bed, reuse the
+            # file for free instead of re-paying ElevenLabs.
+            if os.path.exists(amb_path):
+                amb_file = amb_name
+                print(f"    (reusing ambient bed {amb_name} — already on disk, $0)")
+            else:
+                secs = make_ambient(sc_setting, amb_path)
+                amb_file = amb_name if secs > 0 else ""
+                ambient_seconds += secs
             ambient_by_loc[loc_key] = amb_file
         if amb_file:
             sc["ambient"] = amb_file
@@ -554,17 +614,38 @@ def main():
                 print("    (reusing scene image — same people, same place, $0 saved)")
             else:
                 start_img = os.path.join(OUT_DIR, f"scene_{i:02d}.png")
-                if compose_scene_image(portraits, sc_setting, sc.get("shot", ""),
-                                       sc.get("action", ""), start_img, room_ref=room_ref):
-                    scene_images += 1
+                if os.path.exists(start_img):
+                    # Resume guard: this scene image was composed in a previous run —
+                    # reuse it, don't re-pay Nano Banana.
+                    print(f"    (reusing scene image {os.path.basename(start_img)} "
+                          "— already on disk, $0)")
                     location_ref.setdefault(loc_key, start_img)
                     compose_cache[cache_key] = start_img
+                else:
+                    # For DIALOGUE, force the two people onto known LEFT/RIGHT sides so
+                    # we can crop each line to the right speaker. Narration is one person.
+                    compose_shot = (two_shot_shot(names, chars_by_name, sc.get("shot", ""))
+                                    if sc.get("type") == "dialogue" and len(names) >= 2
+                                    else sc.get("shot", ""))
+                    if compose_scene_image(portraits, sc_setting, compose_shot,
+                                           sc.get("action", ""), start_img, room_ref=room_ref):
+                        scene_images += 1
+                        location_ref.setdefault(loc_key, start_img)
+                        compose_cache[cache_key] = start_img
         if not (start_img and os.path.exists(start_img)):
             print(f"  [{i}] skipped: no scene image could be composed.")
             continue
 
         # --- NARRATION: one Veo clip, protagonist to camera, then re-voice ---
         if sc.get("type") == "narration":
+            # Resume guard: if a previous run already rendered + re-voiced this
+            # narration clip, reuse it for free instead of re-paying Veo.
+            if os.path.exists(clip_path):
+                sc["beats"] = [{"file": clip_name, "kind": "narration",
+                                "speaker": names[0], "silent": False}]
+                print(f"  [{i}] NARRATION [{names[0]}] -> {clip_name} "
+                      "(reused, already on disk, $0)")
+                continue
             lead_c = chars_by_name.get(names[0], {})
             raw = os.path.join(OUT_DIR, f"_raw_{i:02d}.mp4")
             secs = make_veo_clip(start_img, narration_prompt(sc, lead_c),
@@ -583,36 +664,39 @@ def main():
             print(f"  [{i}] NARRATION [{names[0]}] -> {clip_name} (Veo {secs:.0f}s, re-voiced)")
             continue
 
-        # --- DIALOGUE: coverage beats — establishing wide + shot/reverse-shot lines
-        # + silent reaction cutaways. Each stays its OWN beat; the editor joins them
-        # with a continuous bed and soft cuts. Each line clip still has exactly ONE
-        # speaker (rendered from that speaker's single), so the voice-swap stays clean.
+        # --- DIALOGUE: render each LINE from a CROP of the wide two-shot ---
+        # The wide holds both people; we crop into the SPEAKER's side so the line clip
+        # has exactly ONE person (the correct one) on the REAL background. With one
+        # face in frame Veo can't lip-sync the wrong person, and the place can't drift
+        # (it's cut from the wide). Each line stays its own beat for the editor.
         speakers = sc.get("characters", [])
         beats = []
+        # Which side each speaker sits on in the wide (first cast = LEFT, second = RIGHT,
+        # matching two_shot_shot above).
+        side_of = {n: ("left" if k == 0 else "right") for k, n in enumerate(names)}
 
-        # 0) ESTABLISHING — a short FREE still-zoom on the wide two-shot, so we open
-        #    on the geography (who is where) before cutting to singles. $0, no Veo.
-        if angles and angles.get("wide"):
-            est_name = f"beat_{i:02d}_00.mp4"
-            if still_to_clip(angles["wide"], os.path.join(OUT_DIR, est_name)):
-                beats.append({"file": est_name, "kind": "establishing",
-                              "speaker": None, "silent": True})
-
-        lines = sc.get("dialogue", [])
-        for j, d in enumerate(lines, 1):
+        for j, d in enumerate(sc.get("dialogue", []), 1):
             spk = d.get("character")
             spk_c = chars_by_name.get(spk, {})
-            listener = next((n for n in names if n != spk), None)
-            listener_descs = [descriptor(chars_by_name[listener])] if listener else []
 
-            # 1) LINE beat — from the SPEAKER's single (so lines cut shot/reverse-shot);
-            #    fall back to the wide/two-shot if a single is missing.
-            line_img = (angles or {}).get(spk) or start_img
-            raw = os.path.join(OUT_DIR, f"_raw_{i:02d}_{j:02d}.mp4")
             beat_name = f"beat_{i:02d}_{j:02d}.mp4"
             beat_path = os.path.join(OUT_DIR, beat_name)
+            # Resume guard: if this line's beat already exists (rendered + re-voiced in
+            # a previous run), reuse it for free — no re-pay for Veo + voice swap.
+            if os.path.exists(beat_path):
+                beats.append({"file": beat_name, "kind": "line",
+                              "speaker": spk, "silent": False})
+                print(f"    line {j} reused (already on disk, $0)")
+                continue
+
+            # Crop the wide into the speaker's single (correct person + real place);
+            # fall back to the full two-shot only if the crop somehow fails.
+            line_img = os.path.join(OUT_DIR, f"single_{i:02d}_{j:02d}.png")
+            if not crop_single(start_img, side_of.get(spk, "left"), line_img):
+                line_img = start_img
+            raw = os.path.join(OUT_DIR, f"_raw_{i:02d}_{j:02d}.mp4")
             secs = make_veo_clip(
-                line_img, line_prompt(sc, spk_c, listener_descs, d["line"], d.get("emotion", "")),
+                line_img, single_line_prompt(sc, spk_c, d["line"], d.get("emotion", "")),
                 veo_duration(d["line"]), raw)
             if secs == 0.0 or not os.path.exists(raw):
                 print(f"    line {j} skipped (Veo could not generate it).")
@@ -624,33 +708,12 @@ def main():
             beats.append({"file": beat_name, "kind": "line",
                           "speaker": spk, "silent": False})
 
-            # 2) REACTION beat — after a non-final line, cut to the LISTENER reacting
-            #    in silence (a cutaway that hides the seam before the next speaker).
-            #    Rendered with audio OFF (no invented voice), then given a silent track.
-            react_img = (angles or {}).get(listener) if listener else None
-            if REACTIONS and react_img and j < len(lines):
-                rraw = os.path.join(OUT_DIR, f"_rraw_{i:02d}_{j:02d}.mp4")
-                rbeat = f"beat_{i:02d}_{j:02d}r.mp4"
-                rsecs = make_veo_clip(
-                    react_img, reaction_prompt(sc, chars_by_name.get(listener, {}),
-                                               d.get("reaction", "")),
-                    REACTION_DUR, rraw, generate_audio=False)
-                if rsecs > 0 and os.path.exists(rraw) and \
-                        add_silent_audio(rraw, os.path.join(OUT_DIR, rbeat)):
-                    veo_seconds += rsecs
-                    beats.append({"file": rbeat, "kind": "reaction",
-                                  "speaker": listener, "silent": True})
-                if os.path.exists(rraw):
-                    os.remove(rraw)
-
-        if not any(b["kind"] in ("line", "narration") for b in beats):
+        if not beats:
             print(f"  [{i}] DIALOGUE skipped: no lines.")
             continue
         sc["beats"] = beats
-        nl = sum(1 for b in beats if b["kind"] == "line")
-        nr = sum(1 for b in beats if b["kind"] == "reaction")
-        print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {nl} lines, {nr} reactions"
-              f"{' + establishing' if angles else ''} ({'wide+singles' if angles else 'two-shot'})")
+        print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {len(beats)} lines "
+              f"(cropped singles from the two-shot)")
 
     # --- Cost: Veo clips + voice swap + ambient beds + composed images ---
     veo_cost = veo_seconds * costs.VEO_FAST_AUDIO_PER_SEC
