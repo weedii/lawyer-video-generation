@@ -375,7 +375,12 @@ def main():
             # A reaction/establishing cutaway: no speech to find — just hold it briefly.
             start, dur = 0.0, min(full, SILENT_MAX)
         else:
-            start = speech_onset(b["path"])     # cut the staring lead-in before speech
+            # A narration beat is a lone speaker who often pauses before the first
+            # word, so we still trim that staring lead-in. A whole-scene DIALOGUE clip
+            # opens already mid-exchange (the first speaker talks from the very top),
+            # so searching for a speech onset here would slice off that first line —
+            # keep it whole.
+            start = 0.0 if b["kind"] == "dialogue" else speech_onset(b["path"])
             dur = full - start
         zoom_in = (k % 2 == 1)                  # alternate so the video breathes
         normalise(b["path"], out_path, dur, target_w, target_h, zoom_in=zoom_in,

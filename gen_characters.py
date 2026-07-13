@@ -32,30 +32,28 @@ if not os.getenv("FAL_KEY"):
 MODEL = "fal-ai/nano-banana-pro"   # top-tier photorealistic people
 OUT_DIR = "output"
 
-# Same cinematic look added to EVERY character so the whole show matches.
-# This puts the character INSIDE a real setting (not a plain studio portrait),
-# so the talking clips feel like a scene from a TV drama. We keep a medium shot
-# (waist up) so the face stays clear enough for good lip-sync.
-# NOTE: avoid "film still"/widescreen cues — they make the model produce a
-# landscape image even when we ask for 9:16. We push hard for a TALL vertical
-# portrait so the character comes out upright in a 9:16 frame.
-# POSE: keep the person FRONT-FACING. The model kept turning the whole body
-# sideways (shoulders in near-profile) and only swinging the head back, which
-# looks off and hurts the talking-avatar lip-sync. So we now lock the SHOULDERS
-# AND CHEST toward the camera and allow only a small turn — a subtle three-
-# quarter at most. Explicitly forbid a side profile / sideways body.
-STYLE = (
-    "Cinematic vertical portrait photo, tall 9:16 aspect ratio, portrait "
-    "orientation, subject standing upright and centered. The person FACES THE "
-    "CAMERA in a front-facing medium shot: shoulders and chest squared toward "
-    "the camera, with only a subtle turn of the body for a natural, relaxed look "
-    "(a slight three-quarter at most, no more). The head faces forward into the "
-    "lens with BOTH eyes clearly visible. Do NOT show a side profile and do NOT "
-    "turn the body sideways. In the visual style of a prestige legal TV drama. "
-    "The character is inside a modern glass-walled law office at night with a "
-    "blurred city skyline behind them. Moody dramatic lighting, shallow depth of "
-    "field, photorealistic. Waist-up framing, face clearly visible and facing "
-    "the camera."
+# Every character is rendered ONCE as a neutral, multi-angle reference sheet, then
+# reused as the identity anchor when composing each scene. Two problems this fixes:
+#
+#  1) LOCATION BLEED. The old portrait baked the person into a moody night law
+#     office with a blue skyline. When that portrait was fed back as a reference to
+#     build a DIFFERENT scene, its baked-in look bled through — a daytime courtroom
+#     came out blue. A reference has to carry the PERSON, not a place or a colour of
+#     light, so this sheet is a plain grey studio with flat, even lighting.
+#  2) SINGLE ANGLE. One front photo gives the compositor nothing to work from when a
+#     scene needs the person in profile or three-quarter, so the face drifts into
+#     someone else. Showing the same person from several sides (plus matching face
+#     close-ups) holds identity across whatever angle a scene calls for.
+CHAR_SHEET = (
+    "A professional character reference sheet of ONE person, photorealistic, in the "
+    "restrained look of a prestige legal TV drama. Lay it out as four columns and "
+    "two rows — eight shots of the SAME person. Top row: four FULL-BODY views head "
+    "to toe (front, side profile, three-quarter, back), nothing cropped at the head, "
+    "knees or feet. Bottom row: four matching CLOSE-UPS of the face (front, three-"
+    "quarter, profile, slight upward angle) with both eyes clear. Identical face, "
+    "hair, build and wardrobe in every shot. Flat, even, neutral studio lighting on "
+    "a plain light-grey seamless background, no props and no scenery. Sharp facial "
+    "detail."
 )
 
 
@@ -66,16 +64,19 @@ def slug(name: str) -> str:
     return s.strip("_")
 
 
-def make_image(prompt: str, out_path: str):
+def make_image(prompt: str, out_path: str, aspect_ratio: str = "16:9"):
     """Send one prompt to Nano Banana Pro and save the returned image.
     Nano Banana takes an aspect_ratio + resolution (not width/height like FLUX).
-    9:16 = vertical for TikTok; 2K keeps the face sharp (same price as 1K)."""
+    The reference sheet defaults to 16:9 so the four-column, two-row grid of eight
+    shots has room to breathe — a 9:16 frame would squeeze eight views into a thin
+    column and lose the facial detail we need for identity. 2K keeps faces sharp
+    (same price as 1K)."""
     result = fal_client.subscribe(
         MODEL,
         arguments={
             "prompt": prompt,
             "num_images": 1,
-            "aspect_ratio": "9:16",
+            "aspect_ratio": aspect_ratio,
             "resolution": "2K",
         },
         with_logs=False,
@@ -126,12 +127,13 @@ def main():
         file_name = f"char_{slug(name)}.png"
         out_path = os.path.join(OUT_DIR, file_name)
 
-        # EVERY used character gets a real, photorealistic locked portrait (Nano
-        # Banana Pro) — including the hidden-identity people. They are real actors
-        # on screen, not shadows; the only difference is they are referred to by
-        # role, not a real name. One locked face, reused in every scene.
+        # EVERY used character gets a real, photorealistic locked reference sheet
+        # (Nano Banana Pro) — including the hidden-identity people. They are real
+        # actors on screen, not shadows; the only difference is they are referred to
+        # by role, not a real name. The character's own appearance description leads;
+        # CHAR_SHEET forces the neutral, multi-angle sheet layout on top of it.
         who = f"{name} ({c['role']}{', by role' if c.get('anonymous') else ''})"
-        prompt = f"{c['image_prompt']} {STYLE}"
+        prompt = f"{c['image_prompt']} {CHAR_SHEET}"
         print(f"- {who} ...")
         make_image(prompt, out_path)
         total_cost += costs.NANO_BANANA_PRO_PER_IMAGE

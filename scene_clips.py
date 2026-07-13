@@ -138,6 +138,12 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
     face = ("" if n < 2 else
             f" The {n} people FACE EACH OTHER and look at one another, mid-conversation "
             f"— NOT all looking the same direction, NOT looking at the camera.")
+    # Each person reference is now an 8-shot sheet (the same person from several
+    # angles). Without this the compositor can read the sheet literally and paste the
+    # grid or spawn duplicates, so state that each sheet is one single identity.
+    sheet_note = (" Each person reference is a multi-angle character sheet of ONE "
+                  "individual — render that single person, never the grid layout and "
+                  "never a duplicate of anyone.")
     if room_ref and os.path.exists(room_ref):
         urls.append(fal_client.upload_file(room_ref))   # room reference goes LAST
         prompt = (
@@ -145,8 +151,8 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
             f"those people together inside the SAME room shown in the last image — "
             f"keep that room's EXACT architecture, windows, wood panelling, "
             f"furniture, lighting and colour so it is unmistakably the identical "
-            f"location. {only}{face} {action}. Keep each person's exact face and clothing. "
-            f"{shot}. Vertical 9:16 portrait, upright: the people stand/sit in the "
+            f"location. {only}{face}{sheet_note} {action}. Keep each person's exact face "
+            f"and clothing. {shot}. Vertical 9:16 portrait, upright: the people stand/sit in the "
             f"foreground with heads near the TOP of the frame, the room rising "
             f"behind and above them. Photorealistic. NOT rotated, NOT sideways, "
             f"NOT landscape."
@@ -154,7 +160,7 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
     else:
         prompt = (
             f"Put these people together in ONE cinematic shot inside {setting}. "
-            f"{only}{face} {action}. Keep their exact faces and clothing. {shot}. Vertical 9:16 "
+            f"{only}{face}{sheet_note} {action}. Keep their exact faces and clothing. {shot}. Vertical 9:16 "
             f"portrait, upright: the people stand/sit in the foreground with heads "
             f"near the TOP of the frame, the room rising behind and above them. Moody "
             f"cinematic prestige legal-drama lighting, photorealistic. NOT rotated, "
@@ -188,6 +194,35 @@ def veo_duration(text: str) -> str:
     n = len((text or "").split())
     secs = n / 2.5 + 1.5           # ~2.5 words/sec + a little air
     return "4s" if secs <= 4 else "6s" if secs <= 6 else "8s"
+
+
+def _line_windows(lines: list):
+    """Give each dialogue line its own time slice (~2.5 words/sec, min 1.8s so even a
+    short line has room to land) plus the running total, clamped to Veo's 8s ceiling.
+    These slices become an explicit timeline in the prompt. Without a per-speaker time
+    budget Veo tries to voice both lines at once, rushes the hand-off, and fills the
+    seam with a garbled beat where one person's voice comes out of the other's mouth.
+    A timeline hands each speaker a clear window instead."""
+    wins, t = [], 0.0
+    for d in lines:
+        w = len((d.get("line") or "").split())
+        dur = max(w / 2.5, 1.8)
+        wins.append([t, t + dur])
+        t += dur
+    # If the lines overrun 8s, squeeze every window proportionally so the last line
+    # still gets a slot instead of being cut off at the ceiling.
+    if t > 8.0:
+        scale = 8.0 / t
+        wins = [[s * scale, e * scale] for s, e in wins]
+    return wins, min(t, 8.0)
+
+
+def scene_veo_duration(lines: list) -> str:
+    """Veo length for a whole dialogue scene: match the summed line windows so the
+    clip is only as long as the actual speech. Leaving an empty tail is what lets Veo
+    invent extra mumbling to fill it, so we size tight. Clamped to Veo's 4/6/8s."""
+    _, total = _line_windows(lines)
+    return "4s" if total <= 4.5 else "6s" if total <= 6.5 else "8s"
 
 
 def _short_err(e) -> str:
@@ -490,6 +525,57 @@ def line_prompt(sc: dict, speaker_c: dict, listener_descs: list,
     )
 
 
+def _reply_cue(c: dict) -> str:
+    """'She replies' / 'He replies'. The word 'replies' signals to Veo that the next
+    line is a consecutive response, not simultaneous speech — which is what keeps the
+    two speakers from overlapping into one garbled voice."""
+    return "She replies" if character_gender(c) == "female" else "He replies"
+
+
+def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
+    """One prompt for a WHOLE dialogue scene as a single continuous Veo clip, written
+    as an explicit TIMELINE. Each line gets its own time window and a framing change —
+    a medium two-shot for the first line, a reverse over-the-shoulder on the reply —
+    so the shot cuts between the two faces INSIDE one generation (no glue seam) and
+    each speaker owns a clear slice of time. The per-line windows plus the 'replies'
+    hand-off are what stop Veo from voicing both lines at once and mumbling a garbled
+    bridge between them. Delivery cue and micro-expression ride inside each line so
+    the faces perform."""
+    lines = sc.get("dialogue", [])
+    who = {n: descriptor(chars_by_name.get(n, {})) for n in sc.get("characters", [])}
+    wins, total = _line_windows(lines)
+    # Fit the per-line windows exactly into the clip's chosen length, so the timeline
+    # never runs past the end (which would cut the last word) or leave an empty tail
+    # for Veo to fill with invented sound.
+    veo_secs = int(scene_veo_duration(lines)[:-1])
+    if total > 0:
+        scale = veo_secs / total
+        wins = [[s * scale, e * scale] for s, e in wins]
+    # A different framing per line so one continuous take still reads as real coverage.
+    shots = ["Medium two-shot, slow push-in",
+             "Reverse over-the-shoulder onto the other person",
+             "Tighter two-shot, favouring the speaker"]
+    rows = []
+    for j, d in enumerate(lines):
+        s, e = wins[j]
+        spk_name = d.get("character", "")
+        spk = who.get(spk_name, "the other person").capitalize()
+        tone = f" ({d['emotion'].strip()})" if d.get("emotion") else ""
+        lead = (f"{spk} says{tone}" if j == 0
+                else f"{_reply_cue(chars_by_name.get(spk_name, {}))}{tone}")
+        rows.append(f"{s:.1f}-{e:.1f}s: {shots[min(j, len(shots) - 1)]} - "
+                    f"{lead}: \"{d.get('line', '')}\".")
+    return (
+        # Lead with motion so Veo doesn't open on a frozen staring frame.
+        "A continuous cinematic scene, already in motion from the first frame — two "
+        "people mid-conversation across a table, facing EACH OTHER, never the camera. "
+        "Moody prestige legal drama, photorealistic, natural room ambience, no music.\n"
+        "TIMELINE:\n" + "\n".join(rows) +
+        "\nOnly the person whose line it is moves their mouth; the other listens and "
+        "reacts. Natural facial micro-expressions, small head and hand movement."
+    )
+
+
 def narration_prompt(sc: dict, lead_c: dict) -> str:
     """Veo prompt for a memoir narration beat: the lone protagonist performs it
     straight to camera, first person."""
@@ -664,56 +750,40 @@ def main():
             print(f"  [{i}] NARRATION [{names[0]}] -> {clip_name} (Veo {secs:.0f}s, re-voiced)")
             continue
 
-        # --- DIALOGUE: render each LINE from a CROP of the wide two-shot ---
-        # The wide holds both people; we crop into the SPEAKER's side so the line clip
-        # has exactly ONE person (the correct one) on the REAL background. With one
-        # face in frame Veo can't lip-sync the wrong person, and the place can't drift
-        # (it's cut from the wide). Each line stays its own beat for the editor.
+        # --- DIALOGUE: render the WHOLE scene as ONE continuous Veo clip ---
+        # Both people act and talk in a single generation, so the hand-off from one
+        # line to the next happens inside the clip with Veo's native lip-sync — no
+        # glue seam between separate clips, which is what made past conversations feel
+        # chopped. The two speakers therefore share ONE clip; Veo also invents their
+        # voices here. We keep those native voices for dialogue because pulling two
+        # speakers back apart to swap in our cloned voices would need per-speaker
+        # diarisation (a later upgrade). The recurring NARRATOR is still re-voiced
+        # above, so the lead's voice stays consistent across every video.
         speakers = sc.get("characters", [])
-        beats = []
-        # Which side each speaker sits on in the wide (first cast = LEFT, second = RIGHT,
-        # matching two_shot_shot above).
-        side_of = {n: ("left" if k == 0 else "right") for k, n in enumerate(names)}
-
-        for j, d in enumerate(sc.get("dialogue", []), 1):
-            spk = d.get("character")
-            spk_c = chars_by_name.get(spk, {})
-
-            beat_name = f"beat_{i:02d}_{j:02d}.mp4"
-            beat_path = os.path.join(OUT_DIR, beat_name)
-            # Resume guard: if this line's beat already exists (rendered + re-voiced in
-            # a previous run), reuse it for free — no re-pay for Veo + voice swap.
-            if os.path.exists(beat_path):
-                beats.append({"file": beat_name, "kind": "line",
-                              "speaker": spk, "silent": False})
-                print(f"    line {j} reused (already on disk, $0)")
-                continue
-
-            # Crop the wide into the speaker's single (correct person + real place);
-            # fall back to the full two-shot only if the crop somehow fails.
-            line_img = os.path.join(OUT_DIR, f"single_{i:02d}_{j:02d}.png")
-            if not crop_single(start_img, side_of.get(spk, "left"), line_img):
-                line_img = start_img
-            raw = os.path.join(OUT_DIR, f"_raw_{i:02d}_{j:02d}.mp4")
-            secs = make_veo_clip(
-                line_img, single_line_prompt(sc, spk_c, d["line"], d.get("emotion", "")),
-                veo_duration(d["line"]), raw)
-            if secs == 0.0 or not os.path.exists(raw):
-                print(f"    line {j} skipped (Veo could not generate it).")
-                continue
-            veo_seconds += secs
-            sts_seconds += revoice(raw, spk_c.get("voice_id", ""), beat_path)
-            if os.path.exists(raw):
-                os.remove(raw)
-            beats.append({"file": beat_name, "kind": "line",
-                          "speaker": spk, "silent": False})
-
-        if not beats:
+        if not sc.get("dialogue"):
             print(f"  [{i}] DIALOGUE skipped: no lines.")
             continue
-        sc["beats"] = beats
-        print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {len(beats)} lines "
-              f"(cropped singles from the two-shot)")
+
+        # Resume guard: a finished scene clip on disk is reused for free.
+        if os.path.exists(clip_path):
+            sc["beats"] = [{"file": clip_name, "kind": "dialogue",
+                            "speaker": None, "silent": False}]
+            print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {clip_name} "
+                  "(reused, already on disk, $0)")
+            continue
+
+        secs = make_veo_clip(start_img, build_scene_prompt(sc, chars_by_name),
+                             scene_veo_duration(sc.get("dialogue", [])), clip_path)
+        if secs == 0.0 or not os.path.exists(clip_path):
+            print(f"  [{i}] DIALOGUE skipped: Veo could not generate it.")
+            continue
+        veo_seconds += secs
+        # One beat = the whole scene. It carries real lip-synced speech, so the editor
+        # keeps its audio locked to its own video (no sliding across this cut).
+        sc["beats"] = [{"file": clip_name, "kind": "dialogue",
+                        "speaker": None, "silent": False}]
+        print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {clip_name} "
+              f"(one continuous clip, Veo {secs:.0f}s, native voices)")
 
     # --- Cost: Veo clips + voice swap + ambient beds + composed images ---
     veo_cost = veo_seconds * costs.VEO_FAST_AUDIO_PER_SEC

@@ -1,8 +1,8 @@
 """STAGE 2 - STEP 1: Write the SCENE script for the microdrama (scene-based).
 
-NEW MODEL (Kling scene pipeline): the unit is a SCENE, not a single line. Each
-scene is one cinematic shot where the characters ACT and talk TO EACH OTHER —
-like a real short film — instead of one avatar talking to camera per line.
+The unit is a SCENE, not a single line. Each scene is one continuous Veo shot
+where the characters ACT and talk TO EACH OTHER — like a real short film —
+instead of one avatar talking to camera per line.
 
 It reads the analyzed story + characters AND the raw scraped story, then writes
 5-7 scenes with a real arc, in a first-person MEMOIR style:
@@ -57,8 +57,9 @@ def lead_name(data: dict) -> str:
             return c["fictional_name"]
     return chars[0]["fictional_name"] if chars else ""
 
-# HARD LIMIT from the video model: Kling generates at most TWO distinct voices
-# per scene, so every dialogue scene may have AT MOST 2 speaking characters.
+# HARD LIMIT: the whole dialogue scene is rendered as ONE Veo clip, and Veo keeps
+# turn-taking and lip-sync clean for at most TWO distinct speakers in a single
+# generation. So every dialogue scene may have AT MOST 2 speaking characters.
 SYSTEM_PROMPT = """
 You write short vertical TikTok microdramas for an audience of young lawyers,
 based on a REAL legal news story. Write it as a SHORT FILM broken into SCENES —
@@ -163,8 +164,15 @@ HARD RULES:
   sit/stand/face each other — NEVER mention or hint at anyone else: no third person,
   no "colleague nearby", no bystander, no crowd. Both people named must be real cast
   members with a locked photo.
-- Each dialogue scene has 2 to 4 short lines total, alternating between the two
-  characters so they actually talk to each other.
+- Each dialogue scene is ONE short exchange: 2 lines, or 3 at the very most,
+  alternating between the two characters. The whole scene renders as a SINGLE
+  continuous video clip with a hard ceiling of about 8 seconds, so a long
+  back-and-forth will not fit — keep it to one sharp exchange and let the NEXT
+  scene carry whatever comes after.
+- Every line is SHORT and punchy: 6 to 9 words, one breath, quotable. Both people
+  must speak inside that one ~8-second clip, so a long line gets rushed, garbled, or
+  cut off. Write sharp beats, not speeches (e.g. "Book a hotel on the firm card next
+  time, Rowan."). Still land a concrete story fact — just tightly.
 - Every DIALOGUE line must reference a CONCRETE fact from the story (a real event,
   place, document, ruling). No vague feelings-only lines.
 - BANNED generic filler — NEVER write "trust me", "I won't abandon you", "was it
@@ -194,8 +202,12 @@ HARD RULES:
   ("train carriage, morning rush" vs "same train, a bit later") — reuse it exactly.
 
 FOR EACH SCENE also give:
-- "shot": a cinematic shot + camera direction (e.g. "medium two-shot, slow dolly
-  in", "over-the-shoulder close-up", "static wide").
+- "shot": the camera for this ONE continuous take, written as a small ARC of
+  framing rather than a single static setup — how it opens, moves, and where it
+  lands as the line passes between the two people (e.g. "open on a medium two-shot,
+  slow push-in, then favour whoever is speaking"; "over-the-shoulder that reframes
+  onto the listener on the reply"). One flowing shot that changes framing with the
+  dialogue — never a frozen frame, and never a list of separate angles.
 - "action": the BLOCKING — what the people in the shot physically DO. For a DIALOGUE
   scene, describe ALL the "onscreen" people and how they relate in space: the two
   speakers talking, plus any silent reactors and what they do (e.g. "the lead leans
@@ -206,8 +218,10 @@ FOR EACH SCENE also give:
   the lone protagonist and what they do while telling us the story (e.g. "sits on
   the cell bunk, forearms on knees, looking up into the camera"; "walks the empty
   courthouse corridor toward us") — mention ONLY the protagonist.
-- For DIALOGUE lines, an "emotion": one delivery cue (weary, smug, panicked,
-  cold, defensive, contemptuous, ...).
+- For DIALOGUE lines, an "emotion": the delivery cue PLUS a readable facial
+  micro-expression, so the face actually performs instead of sitting flat (e.g.
+  "smug, one eyebrow raised", "cold, jaw tight", "panicked, eyes darting",
+  "weary, a slow blink"). A few words, no more.
 - For DIALOGUE lines, also a short "reaction": how the OTHER person (the listener)
   reacts to this line WITHOUT speaking — a face-only beat we cut to (e.g. "jaw
   tightens", "looks away, stung", "a slow, disbelieving blink"). 2-5 words.
