@@ -45,6 +45,14 @@ LOOK_LUT = os.path.join(OUT_DIR, "look.cube")   # optional creative grade (a .cu
 OPEN_FADE = 0.3      # fade-in from black at the very start
 CLOSE_FADE = 0.4     # fade-out to black at the very end
 EDGE_FADE = 0.04     # tiny audio fade at each cut, to kill the pop/click
+# When the STORY moves to a new place, a hard cut reads as a jarring jump ("wait,
+# where are we now?"). So at a location change we dip the PICTURE briefly to black —
+# the outgoing beat fades down, the incoming beat fades up. We do NOT touch the audio
+# here: the continuous sound bed keeps rolling across the black, so the change feels
+# like a deliberate scene transition, not a dead gap. (Dip-to-black, not a cross-
+# dissolve, on purpose: it needs no clip-overlap maths, so the join stays a safe
+# stream copy and lip-sync can never drift.) Same-location cuts stay hard cuts.
+TRANS_FADE = 0.28    # length of the dip-to-black at each scene/location change
 CRF = 16             # x264 quality: 16 is visually near-lossless (lower = better)
 FPS = 25             # match the talking-model output (Veo/Kling are 25fps)
 ZOOM_AMOUNT = 0.06   # gentle 6% zoom over a clip; alternates in/out per clip
@@ -197,7 +205,8 @@ def grade_chain() -> str:
 
 def normalise(in_path: str, out_path: str, dur: float, w: int, h: int,
               zoom_in: bool = True, is_first: bool = False, is_last: bool = False,
-              start: float = 0.0):
+              start: float = 0.0, fade_in_scene: bool = False,
+              fade_out_scene: bool = False):
     """Re-encode one beat to the common size/fps/quality so the clips join cleanly
     WITHOUT losing quality, applying the shared colour grade and a gentle zoom.
     - High quality (crf 16) so re-encoding barely touches the picture.
@@ -225,8 +234,16 @@ def normalise(in_path: str, out_path: str, dur: float, w: int, h: int,
     )
     if is_first:
         vf += f",fade=t=in:st=0:d={OPEN_FADE}"
+    elif fade_in_scene:
+        # First beat of a new location: rise from black (the outgoing beat dipped to
+        # black just before). Skipped on is_first, which already fades in from black.
+        vf += f",fade=t=in:st=0:d={TRANS_FADE}"
     if is_last:
         vf += f",fade=t=out:st={max(dur - CLOSE_FADE, 0):.3f}:d={CLOSE_FADE}"
+    elif fade_out_scene:
+        # Last beat before the location changes: dip the tail to black. Skipped on
+        # is_last, which already fades out to black at the very end.
+        vf += f",fade=t=out:st={max(dur - TRANS_FADE, 0):.3f}:d={TRANS_FADE}"
 
     # Tiny audio fade at each edge kills the click at a hard cut; the continuous
     # sound bed (mixed in later) fills the little dip so it isn't heard.
@@ -267,6 +284,9 @@ def collect_beats(scenes: list) -> list:
                     "path": p, "scene_i": i, "kind": b.get("kind", "line"),
                     "silent": bool(b.get("silent", False)),
                     "ambient": sc.get("ambient"),
+                    # The scene's location, used to decide where to dip to black — a
+                    # transition only when the PLACE actually changes, not every scene.
+                    "loc": (sc.get("setting") or "").strip().lower(),
                 })
     return beats
 
@@ -313,6 +333,17 @@ def build_ambient_bed(prepared: list, out_path: str) -> str:
     return out_path
 
 
+def has_audio(path: str) -> bool:
+    """True if the file carries an audio stream. DRAFT clips render with audio OFF,
+    so the joined video can be picture-only — we must not try to mix onto a track
+    that isn't there."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries",
+         "stream=index", "-of", "csv=p=0", path],
+        capture_output=True, text=True).stdout.strip()
+    return bool(out)
+
+
 def mix_final(joined: str, bed: str):
     """Mix the continuous ambient bed + optional music UNDER the joined dialogue and
     write the final video. Because bed + music never cut, the soundtrack stays
@@ -332,20 +363,26 @@ def mix_final(joined: str, bed: str):
     for path, _ in extra:
         inputs += ["-i", path]
 
-    # Turn each bed down, then amix everything with the dialogue. duration=first
-    # stops at the video length; normalize=0 keeps the dialogue loud instead of
-    # dividing every input down.
-    parts, labels = [], ["[0:a]"]
+    # With DRAFT (no-audio) clips there is no dialogue track to mix under; the beds
+    # then simply BECOME the soundtrack. Only reference [0:a] when it actually exists,
+    # otherwise ffmpeg aborts on a missing stream.
+    dialogue = has_audio(joined)
+    parts, labels = [], (["[0:a]"] if dialogue else [])
     for idx, (_, vol) in enumerate(extra, start=1):
         parts.append(f"[{idx}:a]volume={vol}[b{idx}]")
         labels.append(f"[b{idx}]")
-    fc = (";".join(parts) + ";" + "".join(labels) +
-          f"amix=inputs={len(labels)}:duration=first:normalize=0[a]")
+    # amix needs >=2 inputs; a lone bed (no dialogue) is just volume-adjusted directly.
+    if len(labels) == 1:
+        fc = ";".join(parts).replace("[b1]", "[a]")
+    else:
+        fc = (";".join(parts) + ";" + "".join(labels) +
+              f"amix=inputs={len(labels)}:duration=first:normalize=0[a]")
     run(["ffmpeg", "-y", *inputs, "-filter_complex", fc,
-         "-map", "0:v", "-map", "[a]",
+         "-map", "0:v", "-map", "[a]", "-shortest",
          "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", FINAL])
     laid = " + ".join(["ambient"] * bool(bed) + ["music"] * os.path.exists(MUSIC))
-    print(f"  laid continuous sound bed under the cuts ({laid})")
+    note = "" if dialogue else " (no dialogue track — beds only, DRAFT clips)"
+    print(f"  laid continuous sound bed under the cuts ({laid}){note}")
 
 
 def main():
@@ -366,6 +403,16 @@ def main():
     target_w, target_h = max(dims, key=lambda wh: wh[0] * wh[1])
     print(f"Editing {len(beats)} beats at {target_w}x{target_h} ...")
 
+    # A location change between consecutive beats is where we dip to black: mark the
+    # OUTGOING beat (last one in the old place) and the INCOMING beat (first in the new
+    # place). Comparing each beat's "loc" to its neighbour's keeps it a real place
+    # change, not a dip at every scene boundary in the same room.
+    for k in range(len(beats)):
+        prev_loc = beats[k - 1]["loc"] if k > 0 else None
+        next_loc = beats[k + 1]["loc"] if k + 1 < len(beats) else None
+        beats[k]["fade_in_scene"] = prev_loc is not None and beats[k]["loc"] != prev_loc
+        beats[k]["fade_out_scene"] = next_loc is not None and beats[k]["loc"] != next_loc
+
     # 1) Prepare each beat: trim the dead lead-in, grade, zoom, size — one at a time.
     prepared = []
     for k, b in enumerate(beats, 1):
@@ -384,7 +431,8 @@ def main():
             dur = full - start
         zoom_in = (k % 2 == 1)                  # alternate so the video breathes
         normalise(b["path"], out_path, dur, target_w, target_h, zoom_in=zoom_in,
-                  is_first=(k == 1), is_last=(k == len(beats)), start=start)
+                  is_first=(k == 1), is_last=(k == len(beats)), start=start,
+                  fade_in_scene=b["fade_in_scene"], fade_out_scene=b["fade_out_scene"])
         prepared.append({"path": out_path, "dur": dur, "ambient": b["ambient"]})
         trim_note = f", cut {start:.2f}s lead-in" if start > 0.05 else ""
         print(f"  [{k}] {os.path.basename(b['path'])} -> {dur:.2f}s "

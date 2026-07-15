@@ -126,9 +126,15 @@ STRUCTURE (a real beginning, middle and end) — 5 to 7 SCENES total:
    the tribunal = ONE scene) — do NOT split a single event into several scenes just
    to make more of them; fewer, fuller scenes look far more consistent than many
    tiny fragments that reset the set. Each scene is two characters confronting each
-   other in one place. OPTIONAL: between them you MAY put ONE short NARRATION scene
-   (beat "bridge") — again the protagonist alone, first person, doing something — to
-   bridge to what comes next or introduce a new player.
+   other in one place. Between them you MAY put ONE short NARRATION scene (beat
+   "bridge") — again the protagonist alone, first person, doing something — to bridge
+   to what comes next. INSERT A BRIDGE WHENEVER THE NEXT DIALOGUE SCENE JUMPS TO A NEW
+   PLACE OR BRINGS IN SOMEONE WE HAVEN'T MET, so the viewer is never dropped into a new
+   room or in front of a stranger cold. The bridge must ORIENT us: in the narrator's
+   own memoir voice, name (or clearly imply) the new place we're moving to or the new
+   person we're about to meet and who they are to him — e.g. "The next morning they
+   dragged me in front of the partner who signed my paycheck." Do it as story, never as
+   stage directions ("in the next scene", "meanwhile").
 3. CLOSE with exactly one NARRATION scene (beat "cliffhanger"): the protagonist,
    alone, first person, a strong button.
 

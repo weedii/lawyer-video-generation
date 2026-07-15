@@ -94,6 +94,12 @@ DRAFT = os.getenv("DRAFT") == "1"
 # (e.g. a real crop of the wide, or a start+end-frame model).
 COVERAGE = False          # compose singles + establishing wide (shot/reverse-shot)
 REACTIONS = False         # insert silent listener reaction cutaways between lines
+# The FREE establishing beat is separate from COVERAGE above: it does NOT compose any
+# new image (no Nano, no Veo, $0) — it just holds a slow push-in on the scene image we
+# already made. We add it once per NEW location so the viewer sees WHERE we are before
+# anyone talks, which is the main cure for the "wait, where are we now?" jump when a
+# scene changes. Same-room continuations get no establishing (nothing new to show).
+ESTABLISH = True          # prepend a $0 still-zoom establishing beat at each new location
 ESTABLISH_SEC = 2.5       # length of the FREE still-zoom establishing beat ($0, no Veo)
 REACTION_DUR = "4s"       # Veo's shortest block; the editor caps silent beats short
 
@@ -482,10 +488,13 @@ def still_to_clip(image_path: str, out_path: str, seconds: float = ESTABLISH_SEC
     (Ken Burns) — no Veo, so it costs $0. A silent stereo track is added so every
     beat has audio for the editor to line up."""
     try:
-        w, h = Image.open(image_path).size
         fr = max(int(seconds * 25), 1)
-        vf = (f"scale={w * 2}:{h * 2},zoompan=z='min(1.0+0.05*on/{fr},1.05)':d={fr}:"
-              f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=25:s={w}x{h}")
+        # Force a 1080x1920 result (2x supersample -> zoom -> back down) so the still
+        # matches Veo's own 1080p size exactly. If the still were a bigger 2K image the
+        # editor would pick IT as the target and needlessly upscale every Veo clip.
+        vf = ("scale=2160:3840:force_original_aspect_ratio=increase,crop=2160:3840,"
+              f"zoompan=z='min(1.0+0.05*on/{fr},1.05)':d={fr}:"
+              "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=25:s=1080x1920")
         subprocess.run(["ffmpeg", "-y", "-loop", "1", "-i", image_path,
                         "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
                         "-t", f"{seconds}", "-vf", vf, "-r", "25",
@@ -496,6 +505,27 @@ def still_to_clip(image_path: str, out_path: str, seconds: float = ESTABLISH_SEC
     except Exception as e:
         print(f"    establishing still-clip failed ({e})")
         return False
+
+
+def establishing_beat(i: int, start_img: str, loc_key: str,
+                      established_locs: set) -> dict:
+    """Return a FREE ($0) establishing beat for a dialogue scene the FIRST time we
+    enter its location, or None otherwise. It's just a slow push-in on the scene
+    image we already composed — no Veo, no Nano — so the viewer sees the new room
+    before anyone speaks. Marked silent so the editor holds it briefly and lets the
+    sound bed carry across it. Returns None on same-room continuations (nothing new
+    to establish) or if the still clip can't be made."""
+    if not ESTABLISH or loc_key in established_locs:
+        return None
+    established_locs.add(loc_key)
+    est_name = f"est_{i:02d}.mp4"
+    est_path = os.path.join(OUT_DIR, est_name)
+    # Resume guard: reuse an establishing clip already on disk (it's $0 either way,
+    # but skipping the ffmpeg pass keeps a re-run fast).
+    if os.path.exists(est_path) or still_to_clip(start_img, est_path):
+        return {"file": est_name, "kind": "establishing", "speaker": None,
+                "silent": True}
+    return None
 
 
 def add_silent_audio(video_path: str, out_path: str) -> bool:
@@ -669,6 +699,7 @@ def main():
     compose_cache = {}      # (same people, same place) -> reuse that image (no re-pay)
     coverage_cache = {}     # (same people, same place) -> reuse the angle set (no re-pay)
     ambient_by_loc = {}     # setting -> looping ambient bed made there (reuse, no re-pay)
+    established_locs = set() # locations we've already shown an establishing beat for
     print(f"Rendering {len(scenes)} scenes ...")
 
     for i, sc in enumerate(scenes, 1):
@@ -824,12 +855,19 @@ def main():
             print(f"  [{i}] DIALOGUE skipped: no lines.")
             continue
 
+        # Free establishing beat the first time we enter this room (see ESTABLISH).
+        # Built once here so BOTH the resume-guard and the fresh-render paths below
+        # can prepend it to this scene's beats.
+        est = establishing_beat(i, start_img, loc_key, established_locs)
+        est_beats = [est] if est else []
+        dialogue_beat = {"file": clip_name, "kind": "dialogue",
+                         "speaker": None, "silent": False}
+
         # Resume guard: a finished scene clip on disk is reused for free.
         if os.path.exists(clip_path):
-            sc["beats"] = [{"file": clip_name, "kind": "dialogue",
-                            "speaker": None, "silent": False}]
+            sc["beats"] = est_beats + [dialogue_beat]
             print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {clip_name} "
-                  "(reused, already on disk, $0)")
+                  f"(reused, already on disk, $0){' + establishing' if est else ''}")
             continue
 
         # DRAFT: shortest length + no audio, to preview framing/identity cheaply.
@@ -840,12 +878,13 @@ def main():
             print(f"  [{i}] DIALOGUE skipped: Veo could not generate it.")
             continue
         veo_seconds += secs
-        # One beat = the whole scene. It carries real lip-synced speech, so the editor
-        # keeps its audio locked to its own video (no sliding across this cut).
-        sc["beats"] = [{"file": clip_name, "kind": "dialogue",
-                        "speaker": None, "silent": False}]
+        # Beats = optional establishing shot, then the whole scene. The dialogue clip
+        # carries real lip-synced speech, so the editor keeps its audio locked to its
+        # own video (no sliding across that cut).
+        sc["beats"] = est_beats + [dialogue_beat]
         print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {clip_name} "
-              f"(one continuous clip, Veo {secs:.0f}s, native voices)")
+              f"(one continuous clip, Veo {secs:.0f}s, native voices)"
+              f"{' + establishing' if est else ''}")
 
     # --- Cost: Veo clips + voice swap + ambient beds + composed images ---
     veo_cost = veo_seconds * costs.VEO_FAST_AUDIO_PER_SEC
