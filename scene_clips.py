@@ -61,7 +61,23 @@ OUT_DIR = "output"
 VEO_MODEL = "fal-ai/veo3.1/fast/image-to-video"   # two-person scene + native lip-sync
 SCENE_EDIT_MODEL = "fal-ai/nano-banana-pro/edit"  # compose chars into one shot
 STS_MODEL = "eleven_english_sts_v2"               # ElevenLabs voice changer (keeps timing)
-VEO_RES = "720p"
+# 1080p costs the SAME per second as 720p on Veo fast, so we take the sharper one for
+# free. (Only 4K costs more.)
+VEO_RES = "1080p"
+
+# ONE shared visual look, dropped into EVERY prompt — the character sheet, the composed
+# scene image, and every Veo clip. Reusing the exact same palette/grain/lens wording is
+# what makes separate generations read as a single film instead of clips from different
+# cameras, and it softens the jump between scenes. Kept in one place so it can never
+# drift out of sync between the steps.
+STYLE = ("shot on 35mm film, muted teal-and-amber palette, soft cinematic grain, "
+         "shallow depth of field, moody prestige legal-drama lighting, photorealistic")
+
+# DRAFT mode (run with DRAFT=1 in the environment) renders cheap for iteration: no audio
+# and the shortest clip length, so you can check framing, identity and motion without
+# paying for the audio pass or full duration. A real run leaves it off, so we get native
+# voices + lip-sync at full length.
+DRAFT = os.getenv("DRAFT") == "1"
 
 # --- Coverage + reactions (DISABLED — see note) -----------------------------
 # The IDEA: COVERAGE = compose a WIDE two-shot + a close-up SINGLE of each speaker
@@ -118,16 +134,30 @@ def descriptor(c: dict) -> str:
     return "the woman" if character_gender(c) == "female" else "the man"
 
 
+def identity_lock(c: dict) -> str:
+    """The character's fixed identity sentence (hair, build, KEY CLOTHING COLOUR, key
+    prop), carried unchanged into every prompt. This is the text anchor that keeps a
+    person looking the same shot to shot, on top of their reference photo — and because
+    it names their clothing colour, it stops the video model from recolouring their
+    outfit when the camera swings to a new angle (the grey suit that turned blue). Falls
+    back to the role handle if analyze produced no lock, so there is always an anchor."""
+    lock = (c.get("lock") or "").strip()
+    return lock if lock else descriptor(c)
+
+
 # --- Scene image: put the characters together in the setting ---------------
 
 def compose_scene_image(portrait_paths: list, setting: str, shot: str,
-                        action: str, out_path: str, room_ref: str = None) -> bool:
+                        action: str, out_path: str, room_ref: str = None,
+                        people: list = None) -> bool:
     """Compose the given character portraits into ONE upright vertical scene image
     (Nano Banana Pro edit). Keeps their exact faces. Returns True on success.
 
     Composed VERTICALLY (people in front, room rising behind/above) so the model
     does not rotate a wide layout sideways. room_ref keeps the SAME room when the
-    cast changes (so a later shot in the same place isn't a different building)."""
+    cast changes (so a later shot in the same place isn't a different building).
+    people = each character's identity-lock sentence, IN THE SAME ORDER as the
+    portraits, so we can tie each reference photo to one named person."""
     urls = [fal_client.upload_file(p) for p in portrait_paths]
     n = len(urls)
     only = (f"EXACTLY {n} " + ("person" if n == 1 else "people") +
@@ -144,6 +174,17 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
     sheet_note = (" Each person reference is a multi-angle character sheet of ONE "
                   "individual — render that single person, never the grid layout and "
                   "never a duplicate of anyone.")
+    # Tie each reference photo to a named identity ("the first person is <lock>, the
+    # second is <lock>"). Naming each reference separately stops the compositor from
+    # blending the two people into one, and repeating each person's clothing colour
+    # here keeps their outfit from being recoloured. Belt-and-braces with the photos.
+    ordinals = ["first", "second", "third", "fourth"]
+    whois = ""
+    if people:
+        labels = [f"the {ordinals[i] if i < len(ordinals) else 'next'} person is {p}"
+                  for i, p in enumerate(people)]
+        whois = (" " + "; ".join(labels) +
+                 ". Keep each person's clothing and its exact colour unchanged.")
     if room_ref and os.path.exists(room_ref):
         urls.append(fal_client.upload_file(room_ref))   # room reference goes LAST
         prompt = (
@@ -151,20 +192,18 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
             f"those people together inside the SAME room shown in the last image — "
             f"keep that room's EXACT architecture, windows, wood panelling, "
             f"furniture, lighting and colour so it is unmistakably the identical "
-            f"location. {only}{face}{sheet_note} {action}. Keep each person's exact face "
-            f"and clothing. {shot}. Vertical 9:16 portrait, upright: the people stand/sit in the "
-            f"foreground with heads near the TOP of the frame, the room rising "
-            f"behind and above them. Photorealistic. NOT rotated, NOT sideways, "
-            f"NOT landscape."
+            f"location. {only}{face}{sheet_note}{whois} {action}. Keep each person's exact "
+            f"face and clothing. {shot}. Vertical 9:16 portrait, upright: the people stand/sit "
+            f"in the foreground with heads near the TOP of the frame, the room rising "
+            f"behind and above them. {STYLE}. NOT rotated, NOT sideways, NOT landscape."
         )
     else:
         prompt = (
             f"Put these people together in ONE cinematic shot inside {setting}. "
-            f"{only}{face}{sheet_note} {action}. Keep their exact faces and clothing. {shot}. Vertical 9:16 "
-            f"portrait, upright: the people stand/sit in the foreground with heads "
-            f"near the TOP of the frame, the room rising behind and above them. Moody "
-            f"cinematic prestige legal-drama lighting, photorealistic. NOT rotated, "
-            f"NOT sideways, NOT landscape."
+            f"{only}{face}{sheet_note}{whois} {action}. Keep their exact faces and clothing. "
+            f"{shot}. Vertical 9:16 portrait, upright: the people stand/sit in the foreground "
+            f"with heads near the TOP of the frame, the room rising behind and above them. "
+            f"{STYLE}. NOT rotated, NOT sideways, NOT landscape."
         )
     for attempt in range(1, 3):
         p = prompt if attempt == 1 else prompt + " CRITICAL: upright vertical frame."
@@ -542,7 +581,8 @@ def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
     bridge between them. Delivery cue and micro-expression ride inside each line so
     the faces perform."""
     lines = sc.get("dialogue", [])
-    who = {n: descriptor(chars_by_name.get(n, {})) for n in sc.get("characters", [])}
+    speakers = sc.get("characters", [])
+    who = {n: descriptor(chars_by_name.get(n, {})) for n in speakers}
     wins, total = _line_windows(lines)
     # Fit the per-line windows exactly into the clip's chosen length, so the timeline
     # never runs past the end (which would cut the last word) or leave an empty tail
@@ -565,14 +605,24 @@ def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
                 else f"{_reply_cue(chars_by_name.get(spk_name, {}))}{tone}")
         rows.append(f"{s:.1f}-{e:.1f}s: {shots[min(j, len(shots) - 1)]} - "
                     f"{lead}: \"{d.get('line', '')}\".")
+    # CAST block: pin each speaker to their locked identity (hair, build, CLOTHING
+    # COLOUR) so the reverse angle can't redraw the wrong face or recolour an outfit.
+    cast = " ".join(f"{who.get(n, 'a person').capitalize()} = "
+                    f"{identity_lock(chars_by_name.get(n, {}))}." for n in speakers)
+    # The scene's blocking, so the shot has a concrete physical action, not just heads.
+    action = (sc.get("action") or "").strip().rstrip(".")
+    action_line = f" {action}." if action else ""
     return (
         # Lead with motion so Veo doesn't open on a frozen staring frame.
         "A continuous cinematic scene, already in motion from the first frame — two "
-        "people mid-conversation across a table, facing EACH OTHER, never the camera. "
-        "Moody prestige legal drama, photorealistic, natural room ambience, no music.\n"
+        "people mid-conversation, facing EACH OTHER, never the camera. "
+        f"{STYLE}, natural room ambience, no music.\n"
+        f"CAST: {cast}\n"
         "TIMELINE:\n" + "\n".join(rows) +
         "\nOnly the person whose line it is moves their mouth; the other listens and "
-        "reacts. Natural facial micro-expressions, small head and hand movement."
+        f"reacts.{action_line} Nuanced facial micro-expressions, real weighty movement and "
+        "object physics, each person's face and clothing colour identical throughout, "
+        "movie-level subtlety."
     )
 
 
@@ -580,13 +630,17 @@ def narration_prompt(sc: dict, lead_c: dict) -> str:
     """Veo prompt for a memoir narration beat: the lone protagonist performs it
     straight to camera, first person."""
     who = descriptor(lead_c).capitalize() if lead_c else "The narrator"
+    # Same identity lock as the dialogue scenes, so the narrator is unmistakably the
+    # same person (same face + clothing colour) whenever he appears between scenes.
+    lock = identity_lock(lead_c) if lead_c else ""
+    lock_line = f" ({lock})" if lock else ""
     return (
         "The scene is already in motion from the very first frame. ONE person is "
         "ALONE in the shot. "
         f"{sc.get('shot', 'slow push-in on a lone figure')}. {sc.get('action', '')}. "
-        f"{who} looks directly INTO the camera and tells us their own story, first "
-        f"person, like a memoir confession: \"{sc.get('narration', '')}\". Nobody "
-        "else is present. Moody cinematic prestige legal drama, photorealistic."
+        f"{who}{lock_line} looks directly INTO the camera and tells us their own story, "
+        f"first person, like a memoir confession: \"{sc.get('narration', '')}\". Nobody "
+        f"else is present. {STYLE}."
     )
 
 
@@ -708,13 +762,17 @@ def main():
                     location_ref.setdefault(loc_key, start_img)
                     compose_cache[cache_key] = start_img
                 else:
-                    # For DIALOGUE, force the two people onto known LEFT/RIGHT sides so
-                    # we can crop each line to the right speaker. Narration is one person.
+                    # For DIALOGUE, seat the two people as a clean facing two-shot;
+                    # narration is one person. The identity locks (in the same order as
+                    # the portraits) name each reference and pin each person's clothing
+                    # colour so the composite can't blend or recolour them.
                     compose_shot = (two_shot_shot(names, chars_by_name, sc.get("shot", ""))
                                     if sc.get("type") == "dialogue" and len(names) >= 2
                                     else sc.get("shot", ""))
+                    locks = [identity_lock(chars_by_name[n]) for n in names]
                     if compose_scene_image(portraits, sc_setting, compose_shot,
-                                           sc.get("action", ""), start_img, room_ref=room_ref):
+                                           sc.get("action", ""), start_img,
+                                           room_ref=room_ref, people=locks):
                         scene_images += 1
                         location_ref.setdefault(loc_key, start_img)
                         compose_cache[cache_key] = start_img
@@ -734,8 +792,10 @@ def main():
                 continue
             lead_c = chars_by_name.get(names[0], {})
             raw = os.path.join(OUT_DIR, f"_raw_{i:02d}.mp4")
-            secs = make_veo_clip(start_img, narration_prompt(sc, lead_c),
-                                 veo_duration(sc.get("narration", "")), raw)
+            # DRAFT: shortest length + no audio, to preview the shot cheaply.
+            dur = "4s" if DRAFT else veo_duration(sc.get("narration", ""))
+            secs = make_veo_clip(start_img, narration_prompt(sc, lead_c), dur, raw,
+                                 generate_audio=not DRAFT)
             if secs == 0.0 or not os.path.exists(raw):
                 print(f"  [{i}] NARRATION skipped: Veo could not generate this beat.")
                 continue
@@ -772,8 +832,10 @@ def main():
                   "(reused, already on disk, $0)")
             continue
 
+        # DRAFT: shortest length + no audio, to preview framing/identity cheaply.
+        dur = "4s" if DRAFT else scene_veo_duration(sc.get("dialogue", []))
         secs = make_veo_clip(start_img, build_scene_prompt(sc, chars_by_name),
-                             scene_veo_duration(sc.get("dialogue", [])), clip_path)
+                             dur, clip_path, generate_audio=not DRAFT)
         if secs == 0.0 or not os.path.exists(clip_path):
             print(f"  [{i}] DIALOGUE skipped: Veo could not generate it.")
             continue

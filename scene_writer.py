@@ -153,6 +153,12 @@ HARD RULES:
 - KEEP NARRATION SHORT AND PUNCHY: each narration beat is ONE or at most TWO short
   sentences (about 18 words / ~7 seconds MAX). It's a sharp hook or button, not a
   paragraph. Cut every spare word — no rambling, no lists, no repeated ideas.
+- NARRATION TONE — cold, dry, specific, a little bitter. The narrator is a disgraced
+  professional looking back, NOT a poet. Ban sentimental "life-lesson" or self-help
+  endings and rebirth clichés: no "the rules have changed—and so have I", no "there's
+  no rewinding", no "I was never the same". Those read as cheesy. Instead land a hard,
+  concrete, slightly cynical line — a fact, a specific regret, or a jab — and stop.
+  Aim for a sharp true-crime / prestige-drama voice, never a greeting card.
 - SPEAKERS / ON-SCREEN. A dialogue scene shows EXACTLY its speakers and no one else:
     * "characters" = the SPEAKERS — AT MOST TWO (the video model allows only two
       voices per shot). These are the two who actually talk in this beat.

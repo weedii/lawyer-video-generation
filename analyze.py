@@ -83,8 +83,11 @@ HIDDEN-IDENTITY PEOPLE (people the article does not name):
 
 For EACH character (named OR hidden-identity), write rich, detailed sections,
 all inferred from the story and their role (make sensible, authentic choices
-where the article is silent). EVERY character must have a full "appearance" and
-"image_prompt" — never leave them empty.
+where the article is silent). EVERY character must have a full "appearance",
+"image_prompt", and a short "lock" — never leave them empty. The "lock" is the
+identity anchor the later steps repeat word-for-word in every shot to stop the
+person's face and CLOTHING from drifting, so it must name their key clothing
+colour; keep it a few details, not a paragraph, and no scene/lighting words.
 
 Return ONLY valid JSON with exactly this shape:
 {
@@ -99,7 +102,8 @@ Return ONLY valid JSON with exactly this shape:
       "gender": "male, female, or unknown",
       "personality": "VERY DETAILED paragraph: their character, temperament, motivations, how they behave under pressure, flaws and strengths — all justified by the story and their role.",
       "appearance": "VERY DETAILED physical description for image generation: age, gender, ethnicity, face shape, skin, eyes, eyebrows, nose, mouth, hair style and colour, facial hair, body build, posture, typical clothing, and any distinguishing features. Make the look fit their personality and role. REQUIRED for every character (named or hidden-identity).",
-      "image_prompt": "ONE clean prompt that combines the look into a single line, cinematic Suits/Billions TV-drama style, photorealistic, professional vertical portrait. No real names. REQUIRED for every character (named or hidden-identity)."
+      "image_prompt": "ONE clean prompt that combines the look into a single line, cinematic Suits/Billions TV-drama style, photorealistic, professional vertical portrait. No real names. REQUIRED for every character (named or hidden-identity).",
+      "lock": "ONE short identity sentence, reused unchanged as this character's anchor in every later shot: age/build, hair, KEY CLOTHING COLOUR, and one key prop (e.g. 'late-50s heavy-set man, slicked grey hair, navy three-piece suit, silver watch'). Distinguishing details only — NOT a paragraph, and NO scene or lighting words."
     }
   ]
 }
