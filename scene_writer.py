@@ -57,9 +57,16 @@ def lead_name(data: dict) -> str:
             return c["fictional_name"]
     return chars[0]["fictional_name"] if chars else ""
 
-# HARD LIMIT: the whole dialogue scene is rendered as ONE Veo clip, and Veo keeps
-# turn-taking and lip-sync clean for at most TWO distinct speakers in a single
-# generation. So every dialogue scene may have AT MOST 2 speaking characters.
+# How many people a dialogue scene may hold. These are NOT model limits — the old
+# 2-speaker cap came from Kling, which only accepted two voices per shot, and we no
+# longer use Kling. What actually binds now:
+#   SPEAKERS: the whole scene is ONE ~8s Veo clip, and each line needs its own time
+#   window to stay lip-synced and un-garbled, so only ~3 short lines fit.
+#   ONSCREEN: every visible person must be composed from their own locked portrait,
+#   and the more faces we pack into one vertical frame, the smaller and less stable
+#   each face gets. Four is where identity still holds.
+MAX_SPEAKERS = 3
+MAX_ONSCREEN = 4
 SYSTEM_PROMPT = """
 You write short vertical TikTok microdramas for an audience of young lawyers,
 based on a REAL legal news story. Write it as a SHORT FILM broken into SCENES —
@@ -75,7 +82,8 @@ Speakers:
   ones.
 - Use as MANY of the cast as the story needs across the scenes — there is NO limit
   on how many characters appear in the video (a story may be one lead plus several
-  others). The only limit is per scene (two speakers), never on the whole cast.
+  others). Per scene the only limits are AT MOST THREE speakers and AT MOST FOUR
+  people on screen; the whole cast is never capped.
 - PREFER to bring the other cast members INTO the drama, not just the two leads:
   when the story supports it, give a side character (e.g. the coroner, a colleague,
   the complainant) their own confrontation scene with one of the leads, so the
@@ -146,11 +154,11 @@ HARD RULES:
   instead: euphemism ("the messages", "inappropriate remarks", "over the line"),
   an uncomfortable silence, a leer, someone recoiling. Suggestive and tense is
   fine; graphic is not. Keep every line clean enough for a mainstream feed.
-- SHOW ONLY THE TWO SPEAKERS IN A DIALOGUE SHOT. The camera frames just the two
-  people who talk in this scene — do NOT stage a third person in the frame and do
-  NOT ask for a "three-shot". The "shot" and "action" must describe ONLY those two.
-  Anyone else who was present gets their OWN separate scene, never a silent extra
-  standing in this one.
+- STAGE THE PEOPLE THE STORY PUTS IN THE ROOM. If a beat really has a third or fourth
+  person present, put them in "onscreen" and let the shot hold them — a silent
+  witness, a partner watching, a clerk taking notes. They react; they need no line.
+  The ONE rule: every person in the frame must be a named cast member from the list
+  above, because only they have a locked photo to compose from.
 - A NARRATION scene has EXACTLY ONE person — the protagonist, ALONE. Its "shot" and
   "action" must describe ONLY the protagonist (pacing, sitting, staring, walking) in
   an EMPTY place; NEVER put another character, bystander, passer-by, background
@@ -165,24 +173,28 @@ HARD RULES:
   no rewinding", no "I was never the same". Those read as cheesy. Instead land a hard,
   concrete, slightly cynical line — a fact, a specific regret, or a jab — and stop.
   Aim for a sharp true-crime / prestige-drama voice, never a greeting card.
-- SPEAKERS / ON-SCREEN. A dialogue scene shows EXACTLY its speakers and no one else:
-    * "characters" = the SPEAKERS — AT MOST TWO (the video model allows only two
-      voices per shot). These are the two who actually talk in this beat.
-    * "onscreen" = the SAME two speakers (copy them). Do NOT add extra silent people
-      to the frame — a third face made the cast all stare past each other and broke
-      consistency. If another person was really there, give THEM their own separate
-      scene with one of the leads; never park them silently in this shot.
-- The "shot" and "action" text must describe ONLY the two speakers and how they
-  sit/stand/face each other — NEVER mention or hint at anyone else: no third person,
-  no "colleague nearby", no bystander, no crowd. Both people named must be real cast
-  members with a locked photo.
+- SPEAKERS / ON-SCREEN. A dialogue scene shows everyone the story really puts in that
+  room — not only the people who talk:
+    * "characters" = the SPEAKERS — AT MOST THREE. This is not a model limit: the whole
+      scene renders as ONE clip of about 8 seconds, so only about three short lines fit.
+    * "onscreen" = EVERYONE visible in the shot — the speakers PLUS anyone who is
+      really present but silent — AT MOST FOUR people. List the speakers FIRST. Silent
+      people are seen and react; they simply have no line in this beat.
+    * EVERY name in "onscreen" and "characters" must be an exact cast member from the
+      list above. NEVER invent a name, and NEVER write an unnamed extra ("a colleague",
+      "a bystander", "a crowd") — anyone we have no photo of is rendered as a random
+      invented face and wrecks consistency. If someone matters but has no cast entry,
+      leave them out.
+- The "shot" and "action" text may describe ANY of the people listed in "onscreen",
+  and NOBODY else. Never mention or hint at a person who is not in "onscreen": no
+  passer-by, no crowd, no "someone nearby".
 - Each dialogue scene is ONE short exchange: 2 lines, or 3 at the very most,
-  alternating between the two characters. The whole scene renders as a SINGLE
+  alternating between the speakers. The whole scene renders as a SINGLE
   continuous video clip with a hard ceiling of about 8 seconds, so a long
   back-and-forth will not fit — keep it to one sharp exchange and let the NEXT
   scene carry whatever comes after.
-- Every line is SHORT and punchy: 6 to 9 words, one breath, quotable. Both people
-  must speak inside that one ~8-second clip, so a long line gets rushed, garbled, or
+- Every line is SHORT and punchy: 6 to 9 words, one breath, quotable. Every speaker
+  must fit inside that one ~8-second clip, so a long line gets rushed, garbled, or
   cut off. Write sharp beats, not speeches (e.g. "Book a hotel on the firm card next
   time, Rowan."). Still land a concrete story fact — just tightly.
 - Every DIALOGUE line must reference a CONCRETE fact from the story (a real event,
@@ -244,7 +256,7 @@ Return ONLY valid JSON with exactly this shape:
   "setting": "one line: the real place where this drama happens",
   "scenes": [
     {"type": "narration", "beat": "intro", "setting": "a fitting place the story put the protagonist (e.g. a holding cell)", "shot": "shot + camera on the lone protagonist", "action": "what the protagonist ALONE physically does while speaking to us (paces, sits, stares out)", "characters": ["Exact Protagonist Name"], "narration": "first-person narration the protagonist speaks to camera", "dialogue": []},
-    {"type": "dialogue", "beat": "setup", "setting": "the real place", "shot": "shot + camera", "action": "blocking for EVERYONE onscreen: the 2 speakers + any silent reactors and what they do", "onscreen": ["Exact Name A", "Exact Name B", "Exact Name C (present, silent)"], "characters": ["Exact Name A", "Exact Name B"], "narration": "", "dialogue": [{"character": "Exact Name A", "line": "what is said", "emotion": "cue", "reaction": "how B silently reacts"}, {"character": "Exact Name B", "line": "reply", "emotion": "cue", "reaction": "how A silently reacts"}]}
+    {"type": "dialogue", "beat": "setup", "setting": "the real place", "shot": "shot + camera", "action": "blocking for EVERYONE onscreen: each speaker + any silent reactors and what they do", "onscreen": ["Exact Name A", "Exact Name B", "Exact Name C"], "characters": ["Exact Name A", "Exact Name B"], "narration": "", "dialogue": [{"character": "Exact Name A", "line": "what is said", "emotion": "cue", "reaction": "how B silently reacts"}, {"character": "Exact Name B", "line": "reply", "emotion": "cue", "reaction": "how A silently reacts"}]}
   ]
 }
 """
@@ -303,27 +315,27 @@ def clean_scenes(script: dict, valid_names: list = None, lead: str = None) -> di
                 lines = [d for d in lines if d["character"].strip().lower() in valid]
             if not lines:
                 continue
-            # Speaking characters, in first-appearance order, capped at TWO.
+            # Speaking characters, in first-appearance order (see MAX_SPEAKERS).
             order = []
             for d in lines:
                 if d["character"] not in order:
                     order.append(d["character"])
-            speakers = order[:2]
-            # Drop any line whose speaker isn't one of the (max 2) kept speakers.
+            speakers = order[:MAX_SPEAKERS]
+            # Drop any line whose speaker isn't one of the kept speakers.
             lines = [d for d in lines if d["character"] in speakers]
             scene["characters"] = speakers
             scene["dialogue"] = lines
             # ON-SCREEN cast = everyone visible in the shot. Speakers are always in
-            # (and go first, so the <=4 cap can never drop a speaker); then add the
-            # model's extra present people, but only REAL cast names (no invented
-            # faces). These extras are seen but silent — they keep people in frame
-            # instead of being swapped out between shots.
+            # (and go first, so the MAX_ONSCREEN cap can never drop a speaker); then
+            # add the model's extra present people, but only REAL cast names — an
+            # unknown name has no locked portrait, so composing it would invent a
+            # random face. These extras are seen but silent.
             onscreen = list(speakers)
             for nm in (sc.get("onscreen") or []):
                 nm = nm.strip() if isinstance(nm, str) else ""
                 if nm and nm not in onscreen and (valid is None or nm.lower() in valid):
                     onscreen.append(nm)
-            scene["onscreen"] = onscreen[:4]
+            scene["onscreen"] = onscreen[:MAX_ONSCREEN]
         cleaned.append(scene)
     script["scenes"] = cleaned
     return script

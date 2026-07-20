@@ -227,10 +227,15 @@ def normalise(in_path: str, out_path: str, dur: float, w: int, h: int,
 
     # Supersample 2x, scale UP by the animated factor Z (scale supports a per-frame
     # `t` via eval=frame), centre-crop back, then apply the shared colour grade.
+    # fps MUST come FIRST, before the animated scale. The zoom below resizes every
+    # frame (eval=frame), and feeding a stream of varying frame sizes into the fps
+    # filter segfaults ffmpeg 8.1. Normalising the rate up front also means we scale
+    # fewer frames, so it's faster too.
     vf = (
+        f"fps={FPS},"
         f"scale={sw}:{sh}:force_original_aspect_ratio=increase,crop={sw}:{sh},"
         f"scale=w='ceil({sw}*{Z}/2)*2':h='ceil({sh}*{Z}/2)*2':eval=frame,"
-        f"crop={sw}:{sh},scale={w}:{h},{grade_chain()},fps={FPS},setpts=PTS-STARTPTS"
+        f"crop={sw}:{sh},scale={w}:{h},{grade_chain()},setpts=PTS-STARTPTS"
     )
     if is_first:
         vf += f",fade=t=in:st=0:d={OPEN_FADE}"

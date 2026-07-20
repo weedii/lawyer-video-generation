@@ -94,14 +94,12 @@ DRAFT = os.getenv("DRAFT") == "1"
 # (e.g. a real crop of the wide, or a start+end-frame model).
 COVERAGE = False          # compose singles + establishing wide (shot/reverse-shot)
 REACTIONS = False         # insert silent listener reaction cutaways between lines
-# The FREE establishing beat is separate from COVERAGE above: it does NOT compose any
-# new image (no Nano, no Veo, $0) — it just holds a slow push-in on the scene image we
-# already made. We add it once per NEW location so the viewer sees WHERE we are before
-# anyone talks, which is the main cure for the "wait, where are we now?" jump when a
-# scene changes. Same-room continuations get no establishing (nothing new to show).
-ESTABLISH = True          # prepend a $0 still-zoom establishing beat at each new location
-ESTABLISH_SEC = 2.5       # length of the FREE still-zoom establishing beat ($0, no Veo)
 REACTION_DUR = "4s"       # Veo's shortest block; the editor caps silent beats short
+# NOTE: we do NOT fake an establishing shot from a still image. Holding a photo on a
+# slow zoom next to real Veo motion just reads as the video freezing, and it stalls the
+# pace exactly where a microdrama has to keep moving. A believable establishing shot has
+# to be real footage. Scene changes are carried by the dip-to-black in assemble.py and
+# the narrator's bridge line instead.
 
 
 def slug(name: str) -> str:
@@ -279,6 +277,70 @@ def _short_err(e) -> str:
     return s[:140]
 
 
+# A Veo generation is the one call we CANNOT afford to lose: it is billed the moment
+# fal starts it, and the result only reaches us if we are still listening. fal_client's
+# subscribe() polls the queue in a loop with no overall deadline, so a stalled poll
+# leaves it waiting forever (it hung a real run for 23 minutes on a dead connection).
+# We therefore submit the job ourselves and poll with our own deadline. Crucially we
+# record the request_id on disk BEFORE waiting: a job we already paid for can then be
+# collected on the next run instead of being submitted — and paid for — a second time.
+VEO_MAX_WAIT = 600        # give one Veo job this long to finish before we stop waiting
+VEO_POLL_EVERY = 5        # ask the queue for its status this often
+VEO_JOBS = os.path.join(OUT_DIR, "_veo_jobs.json")   # out_file -> fal request_id
+
+
+def _veo_jobs() -> dict:
+    """The saved out_file -> request_id map of Veo jobs we have paid to start."""
+    try:
+        with open(VEO_JOBS) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _remember_veo_job(out_path: str, request_id: str):
+    """Record a submitted job so a later run can collect it for free."""
+    jobs = _veo_jobs()
+    jobs[os.path.basename(out_path)] = request_id
+    with open(VEO_JOBS, "w") as f:
+        json.dump(jobs, f, indent=2)
+
+
+def _forget_veo_job(out_path: str):
+    """Drop a job once its video is safely on disk (or is permanently dead)."""
+    jobs = _veo_jobs()
+    if jobs.pop(os.path.basename(out_path), None) is not None:
+        with open(VEO_JOBS, "w") as f:
+            json.dump(jobs, f, indent=2)
+
+
+def _save_veo_video(result: dict, out_path: str) -> bool:
+    """Download the finished video out of a fal result payload."""
+    video = result.get("video")
+    url = video["url"] if isinstance(video, dict) else video
+    if not url:
+        return False
+    with open(out_path, "wb") as f:
+        f.write(requests.get(url, timeout=180).content)
+    return os.path.exists(out_path)
+
+
+def _await_veo(handle, out_path: str) -> bool:
+    """Wait for one submitted Veo job, polling with OUR deadline so a stalled queue
+    poll can never hang the run. A failed poll is ignored and retried — the job keeps
+    running on fal's side regardless of whether we are listening. Returns True if the
+    video landed on disk."""
+    deadline = time.time() + VEO_MAX_WAIT
+    while time.time() < deadline:
+        try:
+            if isinstance(handle.status(), fal_client.Completed):
+                return _save_veo_video(handle.get(), out_path)
+        except Exception:
+            pass          # transient poll failure — the job is unaffected, just retry
+        time.sleep(VEO_POLL_EVERY)
+    return False
+
+
 def make_veo_clip(image_path: str, prompt: str, duration: str, out_path: str,
                   generate_audio: bool = True) -> float:
     """Animate the start image into a clip with Veo 3.1 fast. For dialogue lines we
@@ -288,21 +350,48 @@ def make_veo_clip(image_path: str, prompt: str, duration: str, out_path: str,
     0.0 (and writes no file) if Veo could not make it — so one bad beat never
     crashes the run. Retries transient errors; a content-filter block is permanent
     for that wording, so we stop retrying it (auto_fix already had its one shot)."""
+    # First: collect anything we already paid for. If a previous run submitted this
+    # clip and died waiting, the job kept running on fal — take that video for free
+    # rather than paying to generate the same thing again.
+    prior = _veo_jobs().get(os.path.basename(out_path))
+    if prior:
+        try:
+            handle = fal_client.SyncRequestHandle.from_request_id(
+                fal_client.sync_client._client, VEO_MODEL, prior)
+            if isinstance(handle.status(), fal_client.Completed):
+                if _save_veo_video(handle.get(), out_path):
+                    _forget_veo_job(out_path)
+                    print("    (collected the Veo clip a previous run already paid for, $0)")
+                    return float(int(duration[:-1]))
+            elif _await_veo(handle, out_path):     # still running — wait for it
+                _forget_veo_job(out_path)
+                print("    (collected the Veo clip a previous run already paid for, $0)")
+                return float(int(duration[:-1]))
+        except Exception as e:
+            print(f"    could not collect the earlier Veo job ({_short_err(e)}); re-submitting")
+
     image_url = fal_client.upload_file(image_path)
     for attempt in range(1, 4):
         try:
-            r = fal_client.subscribe(
+            handle = fal_client.submit(
                 VEO_MODEL,
                 arguments={"prompt": prompt, "image_url": image_url,
                            "duration": duration, "resolution": VEO_RES,
                            "generate_audio": generate_audio, "aspect_ratio": "9:16",
                            "auto_fix": True},   # let Veo soften a borderline prompt itself
-                with_logs=False,
             )
-            url = r["video"]["url"] if isinstance(r.get("video"), dict) else r["video"]
-            with open(out_path, "wb") as f:
-                f.write(requests.get(url).content)
-            return float(int(duration[:-1]))
+            # Save the id BEFORE waiting: from here on the job is billable, so it must
+            # be recoverable even if this process is killed mid-wait.
+            _remember_veo_job(out_path, handle.request_id)
+            print(f"    veo rendering {duration} clip (job {handle.request_id[:8]}, "
+                  f"up to {VEO_MAX_WAIT // 60} min) ...")
+            if _await_veo(handle, out_path):
+                _forget_veo_job(out_path)
+                return float(int(duration[:-1]))
+            # Timed out. Keep the job id — the next run collects it instead of re-paying.
+            print(f"    veo attempt {attempt} timed out after {VEO_MAX_WAIT // 60} min; "
+                  "job saved, re-run to collect it without paying again")
+            return 0.0
         except Exception as e:
             msg = _short_err(e)
             print(f"    veo attempt {attempt} failed: {msg}")
@@ -410,7 +499,7 @@ def extract_last_frame(clip_path: str, out_path: str) -> bool:
         return False
 
 
-# --- Coverage, establishing stills, reactions ------------------------------
+# --- Coverage + reactions (both disabled — see the flags above) -------------
 
 def compose_coverage(names: list, chars_by_name: dict, setting: str,
                      room_ref: str, out_prefix: str):
@@ -469,63 +558,29 @@ def crop_single(wide_path: str, side: str, out_path: str) -> bool:
         return False
 
 
-def two_shot_shot(names: list, chars_by_name: dict, base_shot: str) -> str:
-    """Build the wide-two-shot camera line with FORCED left/right positions, so we
-    know which side to crop for each speaker. First cast member = LEFT, second =
-    RIGHT. Keeps the model from placing them in a random order."""
-    left = descriptor(chars_by_name.get(names[0], {}))
-    parts = [f"medium two-shot, {left} seated on the LEFT"]
-    if len(names) > 1:
-        parts[0] += f", {descriptor(chars_by_name[names[1]])} seated on the RIGHT"
-    parts[0] += ", facing each other across a table"
+def group_shot(names: list, chars_by_name: dict, base_shot: str) -> str:
+    """Build the wide camera line with FORCED left-to-right positions for however many
+    people are in the shot, so the model can't shuffle them into a random order (which
+    would make each scene's geography jump). Two people face each other across a table;
+    three or four are staged across the frame so every face stays readable."""
+    n = len(names)
+    if n == 1:
+        return base_shot
+    if n == 2:
+        parts = [f"medium two-shot, {descriptor(chars_by_name.get(names[0], {}))} "
+                 f"seated on the LEFT, {descriptor(chars_by_name.get(names[1], {}))} "
+                 "seated on the RIGHT, facing each other across a table"]
+    else:
+        # Name a slot per person, left to right, so nobody is hidden behind anyone else.
+        slots = ["on the far LEFT", "LEFT of centre", "RIGHT of centre", "on the far RIGHT"]
+        placed = ", ".join(
+            f"{descriptor(chars_by_name.get(nm, {}))} {slots[k] if k < len(slots) else 'beside them'}"
+            for k, nm in enumerate(names))
+        parts = [f"medium wide {n}-shot, {placed}, spread across the frame so every "
+                 "face is clearly visible, turned toward whoever is speaking"]
     if base_shot:
         parts.append(base_shot)
     return ". ".join(parts)
-
-
-def still_to_clip(image_path: str, out_path: str, seconds: float = ESTABLISH_SEC) -> bool:
-    """Make a short SILENT establishing clip from a still image with a slow push-in
-    (Ken Burns) — no Veo, so it costs $0. A silent stereo track is added so every
-    beat has audio for the editor to line up."""
-    try:
-        fr = max(int(seconds * 25), 1)
-        # Force a 1080x1920 result (2x supersample -> zoom -> back down) so the still
-        # matches Veo's own 1080p size exactly. If the still were a bigger 2K image the
-        # editor would pick IT as the target and needlessly upscale every Veo clip.
-        vf = ("scale=2160:3840:force_original_aspect_ratio=increase,crop=2160:3840,"
-              f"zoompan=z='min(1.0+0.05*on/{fr},1.05)':d={fr}:"
-              "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=25:s=1080x1920")
-        subprocess.run(["ffmpeg", "-y", "-loop", "1", "-i", image_path,
-                        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-                        "-t", f"{seconds}", "-vf", vf, "-r", "25",
-                        "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
-                        "-c:a", "aac", "-b:a", "128k", "-shortest", out_path],
-                       check=True, capture_output=True)
-        return os.path.exists(out_path)
-    except Exception as e:
-        print(f"    establishing still-clip failed ({e})")
-        return False
-
-
-def establishing_beat(i: int, start_img: str, loc_key: str,
-                      established_locs: set) -> dict:
-    """Return a FREE ($0) establishing beat for a dialogue scene the FIRST time we
-    enter its location, or None otherwise. It's just a slow push-in on the scene
-    image we already composed — no Veo, no Nano — so the viewer sees the new room
-    before anyone speaks. Marked silent so the editor holds it briefly and lets the
-    sound bed carry across it. Returns None on same-room continuations (nothing new
-    to establish) or if the still clip can't be made."""
-    if not ESTABLISH or loc_key in established_locs:
-        return None
-    established_locs.add(loc_key)
-    est_name = f"est_{i:02d}.mp4"
-    est_path = os.path.join(OUT_DIR, est_name)
-    # Resume guard: reuse an establishing clip already on disk (it's $0 either way,
-    # but skipping the ffmpeg pass keeps a re-run fast).
-    if os.path.exists(est_path) or still_to_clip(start_img, est_path):
-        return {"file": est_name, "kind": "establishing", "speaker": None,
-                "silent": True}
-    return None
 
 
 def add_silent_audio(video_path: str, out_path: str) -> bool:
@@ -612,19 +667,34 @@ def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
     the faces perform."""
     lines = sc.get("dialogue", [])
     speakers = sc.get("characters", [])
-    who = {n: descriptor(chars_by_name.get(n, {})) for n in speakers}
+    # Everyone in the frame, not just the talkers: the silent people are composed into
+    # the start image, so the prompt must account for them or Veo drops or redraws them.
+    onscreen = [n for n in (sc.get("onscreen") or speakers)] or speakers
+    who = {n: descriptor(chars_by_name.get(n, {})) for n in onscreen}
     wins, total = _line_windows(lines)
-    # Fit the per-line windows exactly into the clip's chosen length, so the timeline
-    # never runs past the end (which would cut the last word) or leave an empty tail
-    # for Veo to fill with invented sound.
     veo_secs = int(scene_veo_duration(lines)[:-1])
-    if total > 0:
+    # Only ever SHRINK the windows to fit the clip — never stretch them to fill it.
+    # Stretching pads each line with time it has no words for, and Veo fills that gap
+    # with invented mumbling; because the padding lands at the end of a line, the
+    # garble comes out exactly on the cut to the next speaker (heard as a "monster
+    # voice" mid-scene). Any leftover time is pushed to the END of the clip instead,
+    # where a held silent reaction is harmless — and is asked for explicitly below.
+    if total > veo_secs and total > 0:
         scale = veo_secs / total
         wins = [[s * scale, e * scale] for s, e in wins]
+        total = veo_secs
+    # Whatever time is left after the last word is spoken: name it, so Veo plays it as
+    # deliberate silence rather than treating it as space that needs filling with sound.
+    tail = max(0.0, veo_secs - total)
     # A different framing per line so one continuous take still reads as real coverage.
-    shots = ["Medium two-shot, slow push-in",
-             "Reverse over-the-shoulder onto the other person",
-             "Tighter two-shot, favouring the speaker"]
+    # The opening framing has to hold everyone who is in the room, so it widens with
+    # the cast; the later beats push in on faces regardless of how many people there are.
+    n_on = len(onscreen)
+    opener = ("Medium two-shot, slow push-in" if n_on <= 2 else
+              f"Medium wide {n_on}-shot holding everyone in the room, slow push-in")
+    shots = [opener,
+             "Reverse over-the-shoulder onto the person being spoken to",
+             "Tighter shot, favouring the speaker"]
     rows = []
     for j, d in enumerate(lines):
         s, e = wins[j]
@@ -635,24 +705,58 @@ def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
                 else f"{_reply_cue(chars_by_name.get(spk_name, {}))}{tone}")
         rows.append(f"{s:.1f}-{e:.1f}s: {shots[min(j, len(shots) - 1)]} - "
                     f"{lead}: \"{d.get('line', '')}\".")
-    # CAST block: pin each speaker to their locked identity (hair, build, CLOTHING
-    # COLOUR) so the reverse angle can't redraw the wrong face or recolour an outfit.
+    # CAST block: pin EVERY on-screen person to their locked identity (hair, build,
+    # CLOTHING COLOUR) so the reverse angle can't redraw the wrong face or recolour an
+    # outfit. Silent people need this as much as speakers — they're on camera too.
     cast = " ".join(f"{who.get(n, 'a person').capitalize()} = "
-                    f"{identity_lock(chars_by_name.get(n, {}))}." for n in speakers)
+                    f"{identity_lock(chars_by_name.get(n, {}))}." for n in onscreen)
+    # Name the people who never speak, so Veo keeps them present and reacting instead
+    # of treating them as scenery to drift, mute-swap, or quietly drop out of frame.
+    silent = [who[n] for n in onscreen if n not in speakers]
+    silent_line = ""
+    if silent:
+        verb = "stays" if len(silent) == 1 else "stay"
+        silent_line = (f" {', '.join(silent).capitalize()} {verb} in the room throughout, "
+                       "silent — never speaking or moving their mouth, listening and "
+                       "reacting with their face.")
     # The scene's blocking, so the shot has a concrete physical action, not just heads.
     action = (sc.get("action") or "").strip().rstrip(".")
     action_line = f" {action}." if action else ""
+    # Spell out the silent tail as its own timeline row, so the leftover seconds read as
+    # a directed beat ("hold, nobody speaks") instead of unexplained empty runtime.
+    tail_line = ""
+    if tail >= 0.4:
+        tail_line = (f"\n{total:.1f}-{veo_secs:.1f}s: Hold on the faces in silence — "
+                     "nobody speaks, no words at all, just the reaction settling.")
+    # Declare the cut count up front (like a shot list header) so the model plans real
+    # cuts across the timeline instead of drifting through one unbroken take.
+    cuts = len(rows)
+    # "Facing each other" only makes sense for a pair; a group turns toward whoever
+    # holds the floor. Either way, nobody looks down the lens (that's the narrator's job).
+    if len(onscreen) <= 2:
+        staging = "two people mid-conversation, facing EACH OTHER, never the camera"
+    else:
+        staging = (f"{len(onscreen)} people in one conversation, turned toward whoever "
+                   "is speaking, never the camera")
     return (
         # Lead with motion so Veo doesn't open on a frozen staring frame.
-        "A continuous cinematic scene, already in motion from the first frame — two "
-        "people mid-conversation, facing EACH OTHER, never the camera. "
-        f"{STYLE}, natural room ambience, no music.\n"
+        f"{veo_secs} seconds / {cuts} CUTS / intimate cinematic legal drama / no music.\n"
+        f"A continuous cinematic scene, already in motion from the first frame — "
+        f"{staging}. "
+        f"{STYLE}, natural room ambience.\n"
         f"CAST: {cast}\n"
-        "TIMELINE:\n" + "\n".join(rows) +
-        "\nOnly the person whose line it is moves their mouth; the other listens and "
-        f"reacts.{action_line} Nuanced facial micro-expressions, real weighty movement and "
-        "object physics, each person's face and clothing colour identical throughout, "
-        "movie-level subtlety."
+        "TIMELINE:\n" + "\n".join(rows) + tail_line +
+        "\nNobody speaks except in their own window above — no extra words, no muttering, "
+        "no invented dialogue between the lines. Only the person whose line it is moves "
+        f"their mouth; the others listen and react.{silent_line}{action_line} "
+        # Veo likes to invent big moves, and it stages them from nothing: a seated
+        # person "stands" out of a chair that was never rendered, or furniture pops in
+        # and out. Pin the blocking to what the start frame actually shows.
+        "Everyone keeps the position the opening frame puts them in — whoever is seated "
+        "stays seated, whoever is standing stays standing; nobody stands up, sits down or "
+        "walks off, and no furniture or object appears, vanishes or changes place. "
+        "Nuanced facial micro-expressions, real weighty movement and object physics, "
+        "every person's face and clothing colour identical throughout, movie-level subtlety."
     )
 
 
@@ -699,7 +803,6 @@ def main():
     compose_cache = {}      # (same people, same place) -> reuse that image (no re-pay)
     coverage_cache = {}     # (same people, same place) -> reuse the angle set (no re-pay)
     ambient_by_loc = {}     # setting -> looping ambient bed made there (reuse, no re-pay)
-    established_locs = set() # locations we've already shown an establishing beat for
     print(f"Rendering {len(scenes)} scenes ...")
 
     for i, sc in enumerate(scenes, 1):
@@ -718,11 +821,13 @@ def main():
                 continue
             names = names[:1]
         else:
-            # ONLY the 2 speakers go in the frame. Silent third wheels made the
-            # cast all stare the same way (as if at a 4th person off-camera) and
-            # doubled the cost by re-composing the same group every scene. A third
-            # person who matters gets their OWN scene.
-            names = [n for n in sc.get("characters", [])
+            # EVERYONE the scene puts in the room goes in the frame — the speakers
+            # plus any silent people present. We compose from "onscreen" (not just the
+            # speakers) so every visible face comes from a locked portrait; a person
+            # named in the script but missing from the composite is exactly what makes
+            # the model invent a random face. Anyone without a portrait is dropped for
+            # the same reason. Falls back to the speakers for older analysis files.
+            names = [n for n in (sc.get("onscreen") or sc.get("characters", []))
                      if chars_by_name.get(n, {}).get("file")]
             if not names:
                 print(f"  [{i}] DIALOGUE skipped: no character images.")
@@ -797,7 +902,7 @@ def main():
                     # narration is one person. The identity locks (in the same order as
                     # the portraits) name each reference and pin each person's clothing
                     # colour so the composite can't blend or recolour them.
-                    compose_shot = (two_shot_shot(names, chars_by_name, sc.get("shot", ""))
+                    compose_shot = (group_shot(names, chars_by_name, sc.get("shot", ""))
                                     if sc.get("type") == "dialogue" and len(names) >= 2
                                     else sc.get("shot", ""))
                     locks = [identity_lock(chars_by_name[n]) for n in names]
@@ -855,19 +960,14 @@ def main():
             print(f"  [{i}] DIALOGUE skipped: no lines.")
             continue
 
-        # Free establishing beat the first time we enter this room (see ESTABLISH).
-        # Built once here so BOTH the resume-guard and the fresh-render paths below
-        # can prepend it to this scene's beats.
-        est = establishing_beat(i, start_img, loc_key, established_locs)
-        est_beats = [est] if est else []
         dialogue_beat = {"file": clip_name, "kind": "dialogue",
                          "speaker": None, "silent": False}
 
         # Resume guard: a finished scene clip on disk is reused for free.
         if os.path.exists(clip_path):
-            sc["beats"] = est_beats + [dialogue_beat]
+            sc["beats"] = [dialogue_beat]
             print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {clip_name} "
-                  f"(reused, already on disk, $0){' + establishing' if est else ''}")
+                  "(reused, already on disk, $0)")
             continue
 
         # DRAFT: shortest length + no audio, to preview framing/identity cheaply.
@@ -878,13 +978,11 @@ def main():
             print(f"  [{i}] DIALOGUE skipped: Veo could not generate it.")
             continue
         veo_seconds += secs
-        # Beats = optional establishing shot, then the whole scene. The dialogue clip
-        # carries real lip-synced speech, so the editor keeps its audio locked to its
-        # own video (no sliding across that cut).
-        sc["beats"] = est_beats + [dialogue_beat]
+        # One beat = the whole scene. It carries real lip-synced speech, so the editor
+        # keeps its audio locked to its own video (no sliding across that cut).
+        sc["beats"] = [dialogue_beat]
         print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {clip_name} "
-              f"(one continuous clip, Veo {secs:.0f}s, native voices)"
-              f"{' + establishing' if est else ''}")
+              f"(one continuous clip, Veo {secs:.0f}s, native voices)")
 
     # --- Cost: Veo clips + voice swap + ambient beds + composed images ---
     veo_cost = veo_seconds * costs.VEO_FAST_AUDIO_PER_SEC
