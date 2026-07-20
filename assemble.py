@@ -289,9 +289,12 @@ def collect_beats(scenes: list) -> list:
                     "path": p, "scene_i": i, "kind": b.get("kind", "line"),
                     "silent": bool(b.get("silent", False)),
                     "ambient": sc.get("ambient"),
-                    # The scene's location, used to decide where to dip to black — a
-                    # transition only when the PLACE actually changes, not every scene.
+                    # What the viewer has to re-orient to at a cut: the place, and who
+                    # is in the room. Either one changing is a real scene change and
+                    # earns a transition; if both stay the same we just hard-cut.
                     "loc": (sc.get("setting") or "").strip().lower(),
+                    "cast": tuple(sorted(sc.get("onscreen")
+                                         or sc.get("characters") or [])),
                 })
     return beats
 
@@ -408,15 +411,18 @@ def main():
     target_w, target_h = max(dims, key=lambda wh: wh[0] * wh[1])
     print(f"Editing {len(beats)} beats at {target_w}x{target_h} ...")
 
-    # A location change between consecutive beats is where we dip to black: mark the
-    # OUTGOING beat (last one in the old place) and the INCOMING beat (first in the new
-    # place). Comparing each beat's "loc" to its neighbour's keeps it a real place
-    # change, not a dip at every scene boundary in the same room.
+    # Where to dip to black: any cut the viewer has to re-orient across — a new place
+    # OR a different set of people. Cutting straight from one pair of faces to another
+    # is just as disorienting as changing room, so both count. When the place and the
+    # cast are unchanged, nothing needs explaining and we simply hard-cut.
+    def scene_id(b):
+        return (b["loc"], b["cast"])
+
     for k in range(len(beats)):
-        prev_loc = beats[k - 1]["loc"] if k > 0 else None
-        next_loc = beats[k + 1]["loc"] if k + 1 < len(beats) else None
-        beats[k]["fade_in_scene"] = prev_loc is not None and beats[k]["loc"] != prev_loc
-        beats[k]["fade_out_scene"] = next_loc is not None and beats[k]["loc"] != next_loc
+        prev_s = scene_id(beats[k - 1]) if k > 0 else None
+        next_s = scene_id(beats[k + 1]) if k + 1 < len(beats) else None
+        beats[k]["fade_in_scene"] = prev_s is not None and scene_id(beats[k]) != prev_s
+        beats[k]["fade_out_scene"] = next_s is not None and scene_id(beats[k]) != next_s
 
     # 1) Prepare each beat: trim the dead lead-in, grade, zoom, size — one at a time.
     prepared = []
