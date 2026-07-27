@@ -60,6 +60,7 @@ if not ELEVEN_KEY:
 OUT_DIR = "output"
 VEO_MODEL = "fal-ai/veo3.1/fast/image-to-video"   # two-person scene + native lip-sync
 SCENE_EDIT_MODEL = "fal-ai/nano-banana-pro/edit"  # compose chars into one shot
+IMAGE_MODEL = "fal-ai/nano-banana-pro"            # text-to-image (detail with no room ref)
 STS_MODEL = "eleven_english_sts_v2"               # ElevenLabs voice changer (keeps timing)
 # 1080p costs the SAME per second as 720p on Veo fast, so we take the sharper one for
 # free. (Only 4K costs more.)
@@ -95,11 +96,14 @@ DRAFT = os.getenv("DRAFT") == "1"
 COVERAGE = False          # compose singles + establishing wide (shot/reverse-shot)
 REACTIONS = False         # insert silent listener reaction cutaways between lines
 REACTION_DUR = "4s"       # Veo's shortest block; the editor caps silent beats short
-# NOTE: we do NOT fake an establishing shot from a still image. Holding a photo on a
-# slow zoom next to real Veo motion just reads as the video freezing, and it stalls the
-# pace exactly where a microdrama has to keep moving. A believable establishing shot has
-# to be real footage. Scene changes are carried by the dip-to-black in assemble.py and
-# the narrator's bridge line instead.
+# DETAIL INSERT: at each NEW location we open on a short, silent, face-free shot of one
+# object that says where we are (a gavel, a nameplate, a case bundle) — the modern
+# replacement for the establishing wide. It orients the viewer before the scene starts,
+# and because it has no faces nothing can drift. One Nano image ($0.15) + one 4s silent
+# Veo clip ($0.40) per location, cached so we pay once per place. This is real footage,
+# not a frozen still — that is why the old still-zoom establishing beat was removed.
+DETAIL_INSERTS = True
+DETAIL_DUR = "4s"         # Veo's shortest block; the editor trims it to a ~1.2s glance
 
 
 def slug(name: str) -> str:
@@ -228,6 +232,88 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
             print(f"    compose attempt {attempt} failed ({e}); retrying in 5s ...")
             time.sleep(5)
     return os.path.exists(out_path)
+
+
+# --- Detail (establishing) image: an object, no people --------------------
+
+def compose_detail_image(detail: str, setting: str, room_ref: str, out_path: str) -> bool:
+    """Compose a face-free ESTABLISHING detail of a location — one object that says
+    where we are (a gavel, a brass nameplate, a stack of case files). This is the modern
+    replacement for the establishing wide: it orients the viewer and, because it has NO
+    faces, nothing can drift. room_ref (the first image shot in this location) keeps the
+    detail in the SAME room; without it we compose the object from the setting text."""
+    obj = (detail or "a telling object").strip().rstrip(".")
+    place = (setting or "the room").strip().rstrip(".")
+    common = (f"A cinematic extreme close-up of {obj} in {place}. NObody in frame — no "
+              f"person, no face, no hands, no figure, just the object and its surroundings. "
+              f"{STYLE}. Vertical 9:16 portrait, upright, shallow depth of field.")
+    try:
+        if room_ref and os.path.exists(room_ref):
+            # Anchor to the real room so the detail sits in the same location as the scene.
+            url = fal_client.upload_file(room_ref)
+            r = fal_client.subscribe(
+                SCENE_EDIT_MODEL,
+                arguments={"image_urls": [url],
+                           "prompt": (f"Using the attached image only as the ROOM, show {common} "
+                                      f"Keep that room's exact look; place the object naturally in it."),
+                           "aspect_ratio": "9:16", "resolution": "2K", "num_images": 1},
+                with_logs=False,
+            )
+        else:
+            r = fal_client.subscribe(
+                IMAGE_MODEL,       # no room to anchor to -> compose the object from text
+                arguments={"prompt": common, "aspect_ratio": "9:16",
+                           "resolution": "2K", "num_images": 1},
+                with_logs=False,
+            )
+        with open(out_path, "wb") as f:
+            f.write(requests.get(r["images"][0]["url"], timeout=120).content)
+        return os.path.exists(out_path) and is_portrait(out_path)
+    except Exception as e:
+        print(f"    detail image failed ({e})")
+        return False
+
+
+def make_detail_insert(i: int, detail: str, setting: str, room_ref: str):
+    """Build the establishing detail beat for a new location: compose a face-free object
+    image (Nano) and animate it as a short SILENT Veo clip. Returns
+    (beat_or_None, images_paid, veo_seconds). Resume-guarded on both the image and the
+    clip, so a re-run collects finished work for free. A failure at either step returns
+    no beat — the scene simply opens on its dialogue instead."""
+    if not DETAIL_INSERTS or not detail:
+        return None, 0, 0.0
+    img = os.path.join(OUT_DIR, f"detail_{i:02d}.png")
+    clip = f"insert_{i:02d}.mp4"
+    clip_path = os.path.join(OUT_DIR, clip)
+    beat = {"file": clip, "kind": "insert", "speaker": None, "silent": True}
+
+    if os.path.exists(clip_path):                      # already rendered on a prior run
+        print(f"    (reusing detail insert {clip} — already on disk, $0)")
+        return beat, 0, 0.0
+
+    images_paid = 0
+    if not os.path.exists(img):
+        if not compose_detail_image(detail, setting, room_ref, img):
+            return None, 0, 0.0
+        images_paid = 1
+    # Silent (generate_audio=False): a detail shot has no voice, and the editor holds
+    # it only ~1.2s, so 4s is plenty and it bills at the cheaper no-audio rate.
+    secs = make_veo_clip(img, detail_insert_prompt(detail, setting), DETAIL_DUR,
+                         clip_path, generate_audio=False)
+    if secs == 0.0 or not os.path.exists(clip_path):
+        return None, images_paid, 0.0
+    return beat, images_paid, secs
+
+
+def detail_insert_prompt(detail: str, setting: str) -> str:
+    """Veo prompt for the silent detail beat: a slow, quiet push-in on the object, no
+    people, tiny real-world motion so it reads as footage rather than a frozen still."""
+    obj = (detail or "the object").strip().rstrip(".")
+    place = (setting or "the room").strip().rstrip(".")
+    return (f"A slow, quiet cinematic push-in on {obj} in {place}. NObody in frame — no "
+            f"person, no hands, no face — only the object. Tiny ambient motion (a slight "
+            f"drift of light, dust, or the object settling), the scene already in gentle "
+            f"movement from the first frame. {STYLE}. No text.")
 
 
 # --- Veo clip + re-voice ---------------------------------------------------
@@ -482,6 +568,34 @@ def make_ambient(setting: str, out_path: str, seconds: int = 15) -> float:
         return float(seconds)
     except Exception as e:
         print(f"    ambient bed error ({e})")
+        return 0.0
+
+
+def make_music(out_path: str, seconds: int = 22) -> float:
+    """Generate ONE looping underscore for the whole video (ElevenLabs Sound-Effects,
+    loop=true). The editor loops and DUCKS this under the dialogue so it fills the gaps
+    between lines and glues the cuts without ever masking a voice. We ask for a sparse,
+    tense bed with NO strong melody on purpose — a hummable tune would fight the drama
+    and date fast. Returns the generated seconds (for cost), 0.0 on failure (the editor
+    then simply lays no music)."""
+    prompt = ("Sparse, tense cinematic underscore for a prestige legal drama: low sustained "
+              "strings and a slow soft pulse, dark and restrained, no strong melody, no drums, "
+              "no beat drop — a seamless quiet loop that sits under dialogue.")
+    try:
+        r = requests.post(
+            "https://api.elevenlabs.io/v1/sound-generation",
+            headers={"xi-api-key": ELEVEN_KEY, "Content-Type": "application/json"},
+            json={"text": prompt, "duration_seconds": seconds, "loop": True},
+            timeout=120,
+        )
+        if r.status_code != 200:
+            print(f"    music bed failed {r.status_code}: {r.text[:120]}")
+            return 0.0
+        with open(out_path, "wb") as f:
+            f.write(r.content)
+        return float(seconds)
+    except Exception as e:
+        print(f"    music bed error ({e})")
         return 0.0
 
 
@@ -796,13 +910,24 @@ def main():
     main_names = [c["fictional_name"] for c in named[:2] if c.get("file")]
 
     veo_seconds = 0.0       # Veo video seconds (billed $0.15/s w/ audio)
+    detail_veo_seconds = 0.0  # Veo seconds for silent detail inserts (billed $0.10/s, no audio)
     sts_seconds = 0.0       # ElevenLabs Speech-to-Speech seconds
-    ambient_seconds = 0.0   # ElevenLabs Sound-Effects seconds (ambient beds)
-    scene_images = 0        # composed images we paid for
+    ambient_seconds = 0.0   # ElevenLabs Sound-Effects seconds (ambient beds + music)
+    scene_images = 0        # composed images we paid for (scene composites + details)
     location_ref = {}       # setting -> first image made there (keep the room identical)
     compose_cache = {}      # (same people, same place) -> reuse that image (no re-pay)
     coverage_cache = {}     # (same people, same place) -> reuse the angle set (no re-pay)
     ambient_by_loc = {}     # setting -> looping ambient bed made there (reuse, no re-pay)
+    detail_by_loc = {}      # setting -> detail insert beat made there (reuse, no re-pay)
+
+    # ONE looping underscore for the whole video (see make_music). Reused every run; the
+    # editor loops and ducks it under the dialogue. A failure just means no music.
+    music_path = os.path.join(OUT_DIR, "music.mp3")
+    if os.path.exists(music_path):
+        print("    (reusing music bed music.mp3 — already on disk, $0)")
+    else:
+        ambient_seconds += make_music(music_path)
+
     print(f"Rendering {len(scenes)} scenes ...")
 
     for i, sc in enumerate(scenes, 1):
@@ -960,14 +1085,30 @@ def main():
             print(f"  [{i}] DIALOGUE skipped: no lines.")
             continue
 
+        # Detail insert: the FIRST time we enter a location, open on a silent, face-free
+        # shot of one identifying object, so the viewer is oriented before the scene
+        # starts. Made once per location (detail_by_loc), then prepended to this scene's
+        # beats. Same-location continuations get nothing. Marked seen even on failure so
+        # we don't retry it every scene.
+        insert_beats = []
+        if loc_key not in detail_by_loc:
+            detail_by_loc[loc_key] = None
+            ins, imgs, dsecs = make_detail_insert(
+                i, sc.get("detail", ""), sc_setting, room_ref or start_img)
+            scene_images += imgs
+            detail_veo_seconds += dsecs
+            if ins:
+                detail_by_loc[loc_key] = ins
+                insert_beats = [ins]
+
         dialogue_beat = {"file": clip_name, "kind": "dialogue",
                          "speaker": None, "silent": False}
 
         # Resume guard: a finished scene clip on disk is reused for free.
         if os.path.exists(clip_path):
-            sc["beats"] = [dialogue_beat]
+            sc["beats"] = insert_beats + [dialogue_beat]
             print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {clip_name} "
-                  "(reused, already on disk, $0)")
+                  f"(reused, already on disk, $0){' + detail' if insert_beats else ''}")
             continue
 
         # DRAFT: shortest length + no audio, to preview framing/identity cheaply.
@@ -978,31 +1119,34 @@ def main():
             print(f"  [{i}] DIALOGUE skipped: Veo could not generate it.")
             continue
         veo_seconds += secs
-        # One beat = the whole scene. It carries real lip-synced speech, so the editor
-        # keeps its audio locked to its own video (no sliding across that cut).
-        sc["beats"] = [dialogue_beat]
+        # Beats = optional detail insert, then the whole scene. The dialogue clip carries
+        # real lip-synced speech, so the editor keeps its audio locked to its own video.
+        sc["beats"] = insert_beats + [dialogue_beat]
         print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {clip_name} "
-              f"(one continuous clip, Veo {secs:.0f}s, native voices)")
+              f"(one continuous clip, Veo {secs:.0f}s, native voices)"
+              f"{' + detail' if insert_beats else ''}")
 
-    # --- Cost: Veo clips + voice swap + ambient beds + composed images ---
+    # --- Cost: dialogue/narration Veo + silent detail Veo + voice swap + sound + images ---
     veo_cost = veo_seconds * costs.VEO_FAST_AUDIO_PER_SEC
+    detail_veo_cost = detail_veo_seconds * costs.VEO_FAST_NOAUDIO_PER_SEC   # cheaper: no audio
     sts_cost = sts_seconds * costs.ELEVEN_STS_PER_SEC
-    sfx_cost = ambient_seconds * costs.ELEVEN_SFX_PER_SEC
+    sfx_cost = ambient_seconds * costs.ELEVEN_SFX_PER_SEC                   # ambient beds + music
     image_cost = scene_images * costs.NANO_BANANA_PRO_EDIT_PER_IMAGE
-    clip_cost = veo_cost + sts_cost + sfx_cost + image_cost
+    clip_cost = veo_cost + detail_veo_cost + sts_cost + sfx_cost + image_cost
     costs.record(data, "clips",
-                 f"Scenes - Veo 3.1 fast ({veo_seconds:.0f}s) + voice swap "
-                 f"({sts_seconds:.0f}s) + {scene_images} images + "
-                 f"{ambient_seconds:.0f}s ambient",
+                 f"Scenes - Veo 3.1 fast ({veo_seconds:.0f}s) + detail inserts "
+                 f"({detail_veo_seconds:.0f}s silent) + voice swap ({sts_seconds:.0f}s) + "
+                 f"{scene_images} images + {ambient_seconds:.0f}s sound",
                  clip_cost)
 
     with open(analysis_path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
+    n_inserts = sum(1 for v in detail_by_loc.values() if v)
     print(f"\nUpdated output/analysis.json with the scene beats. "
-          f"({scene_images} scene images, {len(ambient_by_loc)} ambient beds)")
-    costs.show(f"{len(scenes)} scenes (Veo {veo_seconds:.0f}s + voice swap "
-               f"{sts_seconds:.0f}s + {scene_images} images + ambient)", clip_cost)
+          f"({scene_images} images, {len(ambient_by_loc)} ambient beds, {n_inserts} detail inserts)")
+    costs.show(f"{len(scenes)} scenes (Veo {veo_seconds:.0f}s + {detail_veo_seconds:.0f}s detail "
+               f"+ voice swap {sts_seconds:.0f}s + {scene_images} images + sound)", clip_cost)
 
 
 if __name__ == "__main__":

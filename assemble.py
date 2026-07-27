@@ -45,14 +45,18 @@ LOOK_LUT = os.path.join(OUT_DIR, "look.cube")   # optional creative grade (a .cu
 OPEN_FADE = 0.3      # fade-in from black at the very start
 CLOSE_FADE = 0.4     # fade-out to black at the very end
 EDGE_FADE = 0.04     # tiny audio fade at each cut, to kill the pop/click
-# When the STORY moves to a new place, a hard cut reads as a jarring jump ("wait,
-# where are we now?"). So at a location change we dip the PICTURE briefly to black —
-# the outgoing beat fades down, the incoming beat fades up. We do NOT touch the audio
-# here: the continuous sound bed keeps rolling across the black, so the change feels
-# like a deliberate scene transition, not a dead gap. (Dip-to-black, not a cross-
-# dissolve, on purpose: it needs no clip-overlap maths, so the join stays a safe
-# stream copy and lip-sync can never drift.) Same-location cuts stay hard cuts.
-TRANS_FADE = 0.28    # length of the dip-to-black at each scene/location change
+# Scene changes are HARD CUTS by default. That is what real drama does — in a modern
+# feature roughly 9,990 of every 10,000 transitions are straight cuts — and it is what
+# keeps a 40-second vertical video moving. A fade to black is a strong signal meaning
+# "chapter over"; fire it at every scene and either the viewer reads five chapters in
+# forty seconds, or the signal devalues to nothing and all it buys is dead frames that
+# stall the pace (on a scrolling feed, stalled pace loses the viewer).
+#
+# So we keep the dip for the ONE thing it actually says: real time has passed. The
+# script marks those scenes with "time_jump" (scene_writer.py), and only those get it.
+# What carries an ordinary scene change instead is the ambience J-cut below, the
+# narrator's bridge line, and the detail shot — orientation, not punctuation.
+TRANS_FADE = 0.25    # length of the dip-to-black, on a genuine time jump only (~6 frames)
 CRF = 16             # x264 quality: 16 is visually near-lossless (lower = better)
 FPS = 25             # match the talking-model output (Veo/Kling are 25fps)
 ZOOM_AMOUNT = 0.06   # gentle 6% zoom over a clip; alternates in/out per clip
@@ -70,13 +74,39 @@ BASE_GRADE = "eq=contrast=1.06:saturation=1.05:gamma=0.98"
 # --- Continuous sound bed ---------------------------------------------------
 # The ambient bed (room tone) and music run UNBROKEN under the whole video, mixed
 # low, so the soundtrack never cuts even though the picture cuts every few seconds.
-BED_VOL = 0.10       # ambient room-tone level under the dialogue (felt, not heard)
-MUSIC_VOL = 0.12     # background music level under the dialogue
+BED_VOL = 0.07       # ambient room-tone: felt, not heard — sits well under the dialogue
+MUSIC_VOL = 0.09     # background music: present, but clearly under the voices (which is
+                     # the point) — the sidechain duck below drops it further under speech
+# The J-cut: how far the NEXT room's tone starts before the picture cuts to it. Editors
+# put this in the 0.5-1s range for a scene change; below ~0.3s nobody registers it, and
+# past ~2s you are hearing one place while clearly watching another, which reads as a
+# mistake rather than a transition.
+PRELAP = 0.6         # seconds the new location's ambience leads the picture
+BED_XFADE = 0.35     # blend between two room tones, so the swap is never a hard switch
+# Music ducking: the score plays in the gaps between lines and drops under any voice, so
+# it glues the cuts without ever competing with the dialogue. Sidechain keyed off speech.
+DUCK_THRESH = 0.02   # voice louder than this (linear) pushes the music down (low = ducks readily)
+DUCK_RATIO = 12      # how hard it's pushed (high, so speech clearly wins)
+DUCK_ATTACK = 5      # ms to duck once a voice starts (fast, so no word is masked)
+DUCK_RELEASE = 400   # ms to swell back after the voice stops (slow, so it breathes)
 
 # Silent beats (reaction cutaways, establishing shots) are held only briefly — a
 # reaction is a glance, not a scene. Veo's shortest clip is 4s, so we cap silent
 # beats here so a cutaway doesn't overstay and stall the pace.
 SILENT_MAX = 2.2     # max seconds to hold a silent (reaction/establishing) beat
+INSERT_MAX = 1.4     # a detail insert is a glance at the new place, shorter than a reaction
+
+# --- Location cards ---------------------------------------------------------
+# A short place name burned over the first moment of a new location — the Law & Order
+# device. It's the cheapest, most unambiguous way to say "we're somewhere new" and it
+# suits a legal drama. This is NOT a dialogue subtitle (the no-captions rule stands);
+# it is an orientation card, shown only when the location changes and only briefly.
+LOCATION_CARDS = True
+CARD_SECONDS = 1.6           # how long the card stays up
+CARD_FADE = 0.3              # fade in / out of the card
+CARD_FONT = "/System/Library/Fonts/Helvetica.ttc"   # guarded — skipped if missing
+CARD_TIME_WORDS = ("dawn", "morning", "midday", "noon", "afternoon", "dusk",
+                   "evening", "night", "midnight", "late")
 
 # --- Dead lead-in trim ------------------------------------------------------
 # Veo starts every clip with the character just LOOKING at the camera for 1-6s
@@ -194,6 +224,78 @@ def video_dims(path: str) -> tuple:
     return int(w), int(h)
 
 
+def card_text(setting: str) -> str:
+    """Turn a scene's setting into a short, clean location card: the PLACE (the part
+    before the first comma) plus a time-of-day word if the setting mentions one, e.g.
+    'train carriage, morning rush to London' -> 'TRAIN CARRIAGE — MORNING'. Kept short
+    and stripped to letters/space/dash so it reads at a glance and never breaks the
+    drawtext filter (which treats ':' and quotes specially)."""
+    raw = (setting or "").strip()
+    if not raw:
+        return ""
+    place = raw.split(",")[0]
+    low = raw.lower()
+    when = next((w for w in CARD_TIME_WORDS if w in low), "")
+    text = f"{place} - {when}" if when else place
+    text = re.sub(r"[^A-Za-z0-9 -]", "", text).upper().strip()
+    return re.sub(r"\s+", " ", text)[:34]
+
+
+def render_card_png(text: str, w: int, h: int, out_png: str) -> bool:
+    """Draw the location card to a transparent PNG the size of the frame — white text on
+    a soft dark pill, low in the frame. We render with PIL and overlay it with ffmpeg
+    because this ffmpeg build has no drawtext filter (no libfreetype). Returns False if
+    the font is missing, so the caller simply skips the card instead of crashing."""
+    if not os.path.exists(CARD_FONT):
+        return False
+    from PIL import Image, ImageDraw, ImageFont
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    # Start at a comfortable size, then shrink until the text (plus side padding) fits
+    # inside 90% of the frame width, so a long place name never runs off the edges.
+    max_w = int(w * 0.9)
+    size = max(h // 30, 20)
+    while size > 18:
+        font = ImageFont.truetype(CARD_FONT, size)
+        l, t, r, b = draw.textbbox((0, 0), text, font=font)
+        if (r - l) <= max_w:
+            break
+        size -= 2
+    tw, th = r - l, b - t
+    cx, cy = w // 2, int(h * 0.84)
+    padx, pady = int(th * 0.9), int(th * 0.55)
+    draw.rounded_rectangle(
+        [cx - tw // 2 - padx, cy - th // 2 - pady, cx + tw // 2 + padx, cy + th // 2 + pady],
+        radius=int(th * 0.5), fill=(0, 0, 0, 120))
+    draw.text((cx - tw // 2 - l, cy - th // 2 - t), text, font=font, fill=(255, 255, 255, 235))
+    img.save(out_png)
+    return True
+
+
+def overlay_card(norm_path: str, text: str, dur: float, w: int, h: int):
+    """Second pass: burn the location card over an already-normalised beat. The card
+    fades in, holds, and fades out over the first CARD_SECONDS, then the plain picture
+    continues. No-op if cards are off, there is no text, or the font is unavailable."""
+    if not (LOCATION_CARDS and text):
+        return
+    png = norm_path + ".card.png"
+    if not render_card_png(text, w, h, png):
+        return
+    hold = min(CARD_SECONDS, max(dur - CARD_FADE, 0.1))
+    tmp = norm_path + ".carded.mp4"
+    # Fade the PNG's own alpha in then out, then overlay it only for the hold window.
+    fc = (f"[1:v]format=rgba,fade=t=in:st=0:d={CARD_FADE}:alpha=1,"
+          f"fade=t=out:st={max(hold - CARD_FADE, 0):.3f}:d={CARD_FADE}:alpha=1[cd];"
+          f"[0:v][cd]overlay=0:0:enable='lte(t,{hold:.3f})'[v]")
+    run(["ffmpeg", "-y", "-i", norm_path, "-loop", "1", "-t", f"{dur:.3f}", "-i", png,
+         "-filter_complex", fc, "-map", "[v]", "-map", "0:a?",
+         "-c:v", "libx264", "-crf", str(CRF), "-preset", "medium", "-pix_fmt", "yuv420p",
+         "-c:a", "copy", tmp])
+    os.replace(tmp, norm_path)
+    if os.path.exists(png):
+        os.remove(png)
+
+
 def grade_chain() -> str:
     """The colour-grade filter every clip gets: the gentle shared look, plus the
     optional creative LUT if output/look.cube is present."""
@@ -257,18 +359,30 @@ def normalise(in_path: str, out_path: str, dur: float, w: int, h: int,
     af = (f"afade=t=in:st=0:d={a_in},"
           f"afade=t=out:st={max(dur - a_out, 0):.3f}:d={a_out}")
 
-    # -ss BEFORE -i seeks past the dead lead-in; with re-encoding it is frame-
-    # accurate. Both audio and video are seeked together, so lip-sync is preserved.
-    run([
-        "ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", in_path,
-        "-t", f"{dur:.3f}",
-        "-vf", vf, "-af", af,
+    # EVERY normalised beat must end up with an audio stream — even the silent detail
+    # inserts, which are rendered with no audio at all. If one beat has no audio track,
+    # the stream-copy concat that joins them drops audio for the WHOLE video (it takes
+    # its stream layout from the first file, and a silent insert is often that first
+    # beat). So when the source has no audio, we feed in a silent track and map it.
+    silent_src = not has_audio(in_path)
+    cmd = ["ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", in_path]
+    if silent_src:
+        cmd += ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
+    cmd += ["-t", f"{dur:.3f}", "-vf", vf]
+    if silent_src:
+        cmd += ["-map", "0:v", "-map", "1:a"]      # picture from the clip, silence from lavfi
+    else:
+        cmd += ["-af", af, "-map", "0:v", "-map", "0:a"]
+    # -ss BEFORE -i seeks past the dead lead-in; with re-encoding it is frame-accurate.
+    # Both audio and video are seeked together, so lip-sync is preserved.
+    cmd += [
         "-r", str(FPS),
         "-c:v", "libx264", "-crf", str(CRF), "-preset", "medium",
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
         out_path,
-    ])
+    ]
+    run(cmd)
 
 
 def collect_beats(scenes: list) -> list:
@@ -290,21 +404,31 @@ def collect_beats(scenes: list) -> list:
                     "silent": bool(b.get("silent", False)),
                     "ambient": sc.get("ambient"),
                     # What the viewer has to re-orient to at a cut: the place, and who
-                    # is in the room. Either one changing is a real scene change and
-                    # earns a transition; if both stay the same we just hard-cut.
+                    # is in the room. Either one changing is a real scene change.
                     "loc": (sc.get("setting") or "").strip().lower(),
                     "cast": tuple(sorted(sc.get("onscreen")
                                          or sc.get("characters") or [])),
+                    # The setting as written, for the on-screen location card.
+                    "setting": (sc.get("setting") or "").strip(),
+                    # Set by scene_writer when real time passes before this scene — the
+                    # only thing that earns a dip to black. Older files simply lack it.
+                    "time_jump": bool(sc.get("time_jump", False)),
                 })
     return beats
 
 
 def build_ambient_bed(prepared: list, out_path: str) -> str:
-    """Build ONE continuous ambient track spanning the whole video: for each run of
-    beats in the same scene, loop that scene's ambient bed to the run's length,
-    then concat the segments gap-free. A scene with no bed of its own borrows the
-    first available bed, so the room tone is truly unbroken. Returns out_path, or
-    "" if no ambient bed exists at all.
+    """Build ONE continuous ambient track spanning the whole video, and J-CUT it: each
+    new location's room tone starts PRELAP seconds BEFORE the picture cuts to that
+    location, blended with a short crossfade.
+
+    That early sound is what makes a hard cut land as intended instead of as a jolt —
+    the ear arrives in the new room just before the eye does, so the change feels
+    motivated. It is the standard fix for exactly this problem, and it is free: only
+    the bed moves, so dialogue and lip-sync are never touched.
+
+    A scene with no bed of its own borrows the first available bed, so the room tone is
+    truly unbroken. Returns out_path, or "" if no ambient bed exists at all.
 
     prepared: the normalised beats, each {"dur", "ambient"} in play order."""
     fallback = next((b["ambient"] for b in prepared if b.get("ambient")), None)
@@ -312,6 +436,9 @@ def build_ambient_bed(prepared: list, out_path: str) -> str:
         return ""      # no ambient beds were generated -> no bed
 
     # Group consecutive beats into contiguous runs that share a bed, summing length.
+    # Runs are grouped BY bed, so every run boundary is a genuine change of room —
+    # which is exactly where a J-cut belongs. Same room, new people: no boundary, no
+    # J-cut, correctly, because the room tone should not change if the room did not.
     runs = []          # list of [ambient_file, total_seconds]
     for b in prepared:
         amb = b.get("ambient") or fallback
@@ -320,22 +447,50 @@ def build_ambient_bed(prepared: list, out_path: str) -> str:
         else:
             runs.append([amb, b["dur"]])
 
+    # Slide every boundary earlier by PRELAP. Each run loses PRELAP off its end (the
+    # next room starts early) and gains PRELAP at its start (it began early itself), so
+    # only the first run shrinks and only the last grows — the total is unchanged and
+    # the bed still covers the whole picture.
+    lengths = [length for _, length in runs]
+    if len(runs) > 1:
+        lead = min(PRELAP, max(lengths[0] - 0.5, 0.0))   # never eat a whole short run
+        lengths[0] -= lead
+        lengths[-1] += lead
+
+    # acrossfade consumes BED_XFADE from the total at every join, so hand each joined
+    # segment that much extra and the finished bed lands back on the intended length.
+    # The last run also gets a spare second so the bed can never run out a hair early;
+    # the final mix is bounded by the picture, so the surplus is simply trimmed.
+    lengths[-1] += 1.0
     seg_paths = []
-    for k, (amb, length) in enumerate(runs):
+    for k, ((amb, _), length) in enumerate(zip(runs, lengths)):
         seg = os.path.join(OUT_DIR, f"_bedseg_{k:02d}.m4a")
+        pad = BED_XFADE if k > 0 else 0.0
         # -stream_loop -1 repeats the short loop; -t caps it to this run's length.
         run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", os.path.join(OUT_DIR, amb),
-             "-t", f"{length:.3f}", "-ar", "44100", "-ac", "2",
+             "-t", f"{length + pad:.3f}", "-ar", "44100", "-ac", "2",
              "-c:a", "aac", "-b:a", "128k", seg])
         seg_paths.append(seg)
 
-    listf = out_path + ".txt"
-    with open(listf, "w") as f:
-        for p in seg_paths:
-            f.write(f"file '{os.path.abspath(p)}'\n")
-    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listf,
-         "-c", "copy", out_path])
-    for p in seg_paths + [listf]:
+    if len(seg_paths) == 1:                      # one room the whole way: nothing to blend
+        os.replace(seg_paths[0], out_path)
+        return out_path
+
+    # Chain the segments with acrossfade so one room tone dissolves into the next
+    # instead of switching on a frame. (No apad here: apad with no length pads forever
+    # and ffmpeg never exits — the spare second added above is the safety margin.)
+    inputs = []
+    for p in seg_paths:
+        inputs += ["-i", p]
+    parts, label = [], "0:a"
+    for k in range(1, len(seg_paths)):
+        out_lbl = f"x{k}"
+        parts.append(f"[{label}][{k}:a]acrossfade=d={BED_XFADE}[{out_lbl}]")
+        label = out_lbl
+    fc = ";".join(parts)
+    run(["ffmpeg", "-y", *inputs, "-filter_complex", fc, "-map", f"[{label}]",
+         "-ar", "44100", "-ac", "2", "-c:a", "aac", "-b:a", "128k", out_path])
+    for p in seg_paths:
         if os.path.exists(p):
             os.remove(p)
     return out_path
@@ -354,41 +509,68 @@ def has_audio(path: str) -> bool:
 
 def mix_final(joined: str, bed: str):
     """Mix the continuous ambient bed + optional music UNDER the joined dialogue and
-    write the final video. Because bed + music never cut, the soundtrack stays
-    continuous even though the picture cuts. The dialogue stays at full level
-    (normalize=0); the beds sit low underneath."""
-    extra = []
-    if bed:
-        extra.append((bed, BED_VOL))
-    if os.path.exists(MUSIC):
-        extra.append((MUSIC, MUSIC_VOL))
-    if not extra:                              # nothing to lay under -> keep the plain join
+    write the final video. Because bed + music never cut at a scene boundary, the
+    soundtrack stays continuous even though the picture cuts — the single cheapest way
+    to tell the viewer 'this is one story' across a hard cut.
+
+    The dialogue stays at full level. The ambient bed sits low and CONSTANT (it is the
+    room, so it must not dip). The MUSIC is looped to span the whole video and DUCKED
+    under the dialogue with a sidechain compressor, so it fills the silences between
+    lines but never fights a voice."""
+    has_music = os.path.exists(MUSIC)
+    if not bed and not has_music:              # nothing to lay under -> keep the plain join
         os.replace(joined, FINAL)
         print("  (no ambient bed or music — kept the plain join)")
         return
 
-    inputs = ["-i", joined]
-    for path, _ in extra:
-        inputs += ["-i", path]
+    # Build the inputs, tracking each one's ffmpeg index. Music is a short loop, so it
+    # gets -stream_loop -1 to repeat across the whole runtime; the bed is already full
+    # length. -shortest later trims either surplus back to the picture length.
+    inputs, idx = ["-i", joined], 1
+    bed_i = music_i = None
+    if bed:
+        inputs += ["-i", bed]; bed_i = idx; idx += 1
+    if has_music:
+        inputs += ["-stream_loop", "-1", "-i", MUSIC]; music_i = idx; idx += 1
 
-    # With DRAFT (no-audio) clips there is no dialogue track to mix under; the beds
-    # then simply BECOME the soundtrack. Only reference [0:a] when it actually exists,
-    # otherwise ffmpeg aborts on a missing stream.
+    # DRAFT clips carry no dialogue, so there is no voice to mix under or to duck
+    # against — the beds simply BECOME the soundtrack.
     dialogue = has_audio(joined)
-    parts, labels = [], (["[0:a]"] if dialogue else [])
-    for idx, (_, vol) in enumerate(extra, start=1):
-        parts.append(f"[{idx}:a]volume={vol}[b{idx}]")
-        labels.append(f"[b{idx}]")
-    # amix needs >=2 inputs; a lone bed (no dialogue) is just volume-adjusted directly.
-    if len(labels) == 1:
-        fc = ";".join(parts).replace("[b1]", "[a]")
+    duck = dialogue and music_i is not None     # only then do we need a sidechain key
+    parts, labels = [], []
+
+    if dialogue:
+        if duck:
+            # Split the dialogue: one copy into the mix, one as the sidechain key that
+            # ducks the music. (Only split when the key is actually consumed — a
+            # dangling asplit output makes ffmpeg abort.)
+            parts.append("[0:a]asplit=2[dry][key]")
+            labels.append("[dry]")
+        else:
+            labels.append("[0:a]")
+    if bed_i is not None:
+        parts.append(f"[{bed_i}:a]volume={BED_VOL}[bd]")   # constant room tone, never ducked
+        labels.append("[bd]")
+    if music_i is not None:
+        parts.append(f"[{music_i}:a]volume={MUSIC_VOL}[mv]")
+        if duck:
+            # sidechaincompress turns the music down whenever the voice is present, then
+            # lets it swell back in the gaps — so music glues the cuts without masking speech.
+            parts.append(f"[mv][key]sidechaincompress=threshold={DUCK_THRESH}:"
+                         f"ratio={DUCK_RATIO}:attack={DUCK_ATTACK}:release={DUCK_RELEASE}[mus]")
+        else:
+            parts.append("[mv]anull[mus]")
+        labels.append("[mus]")
+
+    if len(labels) == 1:                       # a single source is just mapped straight out
+        fc = ";".join(parts) + f";{labels[0]}anull[a]"
     else:
         fc = (";".join(parts) + ";" + "".join(labels) +
               f"amix=inputs={len(labels)}:duration=first:normalize=0[a]")
     run(["ffmpeg", "-y", *inputs, "-filter_complex", fc,
          "-map", "0:v", "-map", "[a]", "-shortest",
          "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", FINAL])
-    laid = " + ".join(["ambient"] * bool(bed) + ["music"] * os.path.exists(MUSIC))
+    laid = " + ".join(["ambient"] * bool(bed) + ["music (ducked)"] * has_music)
     note = "" if dialogue else " (no dialogue track — beds only, DRAFT clips)"
     print(f"  laid continuous sound bed under the cuts ({laid}){note}")
 
@@ -411,18 +593,24 @@ def main():
     target_w, target_h = max(dims, key=lambda wh: wh[0] * wh[1])
     print(f"Editing {len(beats)} beats at {target_w}x{target_h} ...")
 
-    # Where to dip to black: any cut the viewer has to re-orient across — a new place
-    # OR a different set of people. Cutting straight from one pair of faces to another
-    # is just as disorienting as changing room, so both count. When the place and the
-    # cast are unchanged, nothing needs explaining and we simply hard-cut.
+    # Dip to black ONLY where the script says real time passed (see TRANS_FADE). Every
+    # other scene change is a straight cut, carried by sound and the narrator instead.
     def scene_id(b):
         return (b["loc"], b["cast"])
 
     for k in range(len(beats)):
         prev_s = scene_id(beats[k - 1]) if k > 0 else None
         next_s = scene_id(beats[k + 1]) if k + 1 < len(beats) else None
-        beats[k]["fade_in_scene"] = prev_s is not None and scene_id(beats[k]) != prev_s
-        beats[k]["fade_out_scene"] = next_s is not None and scene_id(beats[k]) != next_s
+        starts_scene = prev_s is not None and scene_id(beats[k]) != prev_s
+        ends_scene = next_s is not None and scene_id(beats[k]) != next_s
+        # The jump belongs to the INCOMING scene, so the beat that ends the outgoing one
+        # only fades out if the beat that follows it is the flagged one.
+        beats[k]["fade_in_scene"] = starts_scene and beats[k]["time_jump"]
+        beats[k]["fade_out_scene"] = ends_scene and beats[k + 1]["time_jump"]
+        # A location card shows on the FIRST beat of each new place (including the very
+        # first beat of the video). Same-place continuations get nothing.
+        new_loc = k == 0 or beats[k]["loc"] != beats[k - 1]["loc"]
+        beats[k]["card"] = card_text(beats[k]["setting"]) if new_loc else ""
 
     # 1) Prepare each beat: trim the dead lead-in, grade, zoom, size — one at a time.
     prepared = []
@@ -430,8 +618,10 @@ def main():
         out_path = os.path.join(OUT_DIR, f"_norm_{k:02d}.mp4")
         full = audio_duration(b["path"])
         if b["silent"]:
-            # A reaction/establishing cutaway: no speech to find — just hold it briefly.
-            start, dur = 0.0, min(full, SILENT_MAX)
+            # A silent beat has no speech to find — just hold it briefly. A detail
+            # insert is a quick glance at the new place, held shorter than a reaction.
+            hold = INSERT_MAX if b["kind"] == "insert" else SILENT_MAX
+            start, dur = 0.0, min(full, hold)
         else:
             # A narration beat is a lone speaker who often pauses before the first
             # word, so we still trim that staring lead-in. A whole-scene DIALOGUE clip
@@ -444,6 +634,8 @@ def main():
         normalise(b["path"], out_path, dur, target_w, target_h, zoom_in=zoom_in,
                   is_first=(k == 1), is_last=(k == len(beats)), start=start,
                   fade_in_scene=b["fade_in_scene"], fade_out_scene=b["fade_out_scene"])
+        # Burn the location card (if this beat opens a new place) in a second pass.
+        overlay_card(out_path, b.get("card", ""), dur, target_w, target_h)
         prepared.append({"path": out_path, "dur": dur, "ambient": b["ambient"]})
         trim_note = f", cut {start:.2f}s lead-in" if start > 0.05 else ""
         print(f"  [{k}] {os.path.basename(b['path'])} -> {dur:.2f}s "

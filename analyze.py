@@ -206,6 +206,39 @@ def leaked_names(result: dict, banned: list[str]) -> list[str]:
     return leaks
 
 
+def _edit_distance(a: str, b: str) -> int:
+    """Levenshtein distance — how many single-character edits turn a into b."""
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def name_collisions(result: dict) -> list[str]:
+    """Find invented FIRST names that are too easy to confuse, so we can force a rename.
+    Confusable names are a real source of viewer confusion ('wait, which one was that?').
+    We flag a pair when their first names share the first two letters or are within two
+    edits of each other. Anonymous role-labels are skipped — they aren't personal names."""
+    firsts = []
+    for c in result.get("characters", []):
+        if c.get("anonymous"):
+            continue
+        fn = (c.get("fictional_name") or "").strip().split()
+        if fn:
+            firsts.append(fn[0])
+    clashes = []
+    for i in range(len(firsts)):
+        for j in range(i + 1, len(firsts)):
+            a, b = firsts[i], firsts[j]
+            al, bl = a.lower(), b.lower()
+            if al[:2] == bl[:2] or _edit_distance(al, bl) <= 2:
+                clashes.append(f"{a}/{b}")
+    return clashes
+
+
 def analyze(story: dict) -> tuple[dict, float]:
     # timeout: don't hang forever if OpenAI is slow. max_retries: auto-retry.
     client = OpenAI(api_key=KEY, timeout=45.0, max_retries=3)
@@ -252,11 +285,20 @@ def analyze(story: dict) -> tuple[dict, float]:
         result = json.loads(resp.choices[0].message.content)
 
         leaks = leaked_names(result, banned)
-        if not leaks:
+        clashes = name_collisions(result)
+        if not leaks and not clashes:
             break  # clean output, we are done
-        # A real name slipped through — tell the model exactly which, and retry.
-        print(f"  Leaked real names {leaks}; retrying ...")
-        extra = f"\nYou previously leaked these — they are STILL banned: {', '.join(leaks)}"
+        # A real name leaked, or two invented names are too alike — tell the model
+        # exactly what to fix and retry. Both notes can fire on the same retry.
+        extra = ""
+        if leaks:
+            print(f"  Leaked real names {leaks}; retrying ...")
+            extra += f"\nYou previously leaked these — they are STILL banned: {', '.join(leaks)}"
+        if clashes:
+            print(f"  Confusable names {clashes}; retrying with distinct names ...")
+            extra += ("\nThese invented names are too easy to confuse — give them clearly "
+                      "DIFFERENT first names (different first letters and sounds): "
+                      f"{', '.join(clashes)}")
 
     # Show hidden-identity people by their role ("Junior Associate") instead of a
     # personal name. This role becomes their id everywhere; scene_writer copies it

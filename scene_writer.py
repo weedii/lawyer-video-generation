@@ -118,10 +118,14 @@ THE NARRATOR IS THE MAIN CHARACTER (first-person memoir — this is the style):
   OTHER and NEVER look at the camera. Only the protagonist's solo narration faces us.
 
 INTRODUCE NEW FACES (so the viewer is never confused):
-- The FIRST time a character appears who wasn't in an earlier scene, make it clear
-  who they are — either the narrator names their role in the scene just before
-  (e.g. "Her junior associate had been watching the whole time."), or the dialogue
-  itself makes the relationship obvious in the first line. Never drop a brand-new
+- PRE-NAME every important character BEFORE their face first appears. In the scene (or
+  narration) that comes just before their entrance, have someone say their name and who
+  they are to the protagonist — "The partner who signed my paycheck wanted a word." By
+  the time we see them, the viewer already knows who they are, so their entrance lands
+  instead of puzzling. (This is how the best films do it — a new face is talked about
+  before it is shown.) The pre-name and the entrance must be in DIFFERENT scenes.
+- The FIRST time a character appears, the scene must ALSO make their role obvious in its
+  first line or action — belt and braces on top of the pre-name. Never drop a brand-new
   face into a scene with no context.
 
 STRUCTURE (a real beginning, middle and end) — 5 to 7 SCENES total:
@@ -167,6 +171,12 @@ HARD RULES:
 - KEEP NARRATION SHORT AND PUNCHY: each narration beat is ONE or at most TWO short
   sentences (about 18 words / ~7 seconds MAX). It's a sharp hook or button, not a
   paragraph. Cut every spare word — no rambling, no lists, no repeated ideas.
+- NARRATION MUST NOT DESCRIBE THE PICTURE. It says what the image CANNOT — a private
+  thought, a judgement, hindsight, a jump in time, the stakes. It must never narrate
+  what we already see: not "I walked into the tribunal" over a shot of him walking in
+  (that is the lazy, cheap kind of voiceover). Over that same shot, say the thing the
+  picture can't — "Fifteen years at the Bar, undone by a group chat." The picture shows
+  the WHERE; the narration adds the meaning.
 - NARRATION TONE — cold, dry, specific, a little bitter. The narrator is a disgraced
   professional looking back, NOT a poet. Ban sentimental "life-lesson" or self-help
   endings and rebirth clichés: no "the rules have changed—and so have I", no "there's
@@ -188,6 +198,11 @@ HARD RULES:
 - The "shot" and "action" text may describe ANY of the people listed in "onscreen",
   and NOBODY else. Never mention or hint at a person who is not in "onscreen": no
   passer-by, no crowd, no "someone nearby".
+- GET IN LATE, LEAVE EARLY. Start every scene at the MOMENT OF CONFLICT, not at the
+  hello. No greetings, no "sit down", no walking-in — the first line is already the
+  sharp part of the argument, and the scene ends the instant the point lands. We skip
+  the dull setup entirely; that is what makes a microdrama move and removes any need to
+  "establish" the scene first.
 - Each dialogue scene is ONE short exchange: 2 lines, or 3 at the very most,
   alternating between the speakers. The whole scene renders as a SINGLE
   continuous video clip with a hard ceiling of about 8 seconds, so a long
@@ -242,6 +257,16 @@ FOR EACH SCENE also give:
   the lone protagonist and what they do while telling us the story (e.g. "sits on
   the cell bunk, forearms on knees, looking up into the camera"; "walks the empty
   courthouse corridor toward us") — mention ONLY the protagonist.
+- Every scene needs a "detail": ONE concrete object that instantly says WHERE we are —
+  a brass nameplate, a gavel, a stack of tagged case files, a train window, a barred
+  cell door. It must be an OBJECT, never a person, and something that genuinely belongs
+  in that place. We open each new location on this detail so the viewer is oriented
+  before the scene starts, so pick something legible and specific, not "a room".
+- Every scene needs "time_jump": true ONLY if real time has clearly passed since the
+  PREVIOUS scene — a later day, "that evening", after the hearing, weeks on. If the next
+  scene continues the same stretch of time (even in a new place, like stepping off the
+  train onto the platform moments later), it is false. Be sparing: most scenes are
+  false. This is the only thing that earns a fade to black between scenes.
 - For DIALOGUE lines, an "emotion": the delivery cue PLUS a readable facial
   micro-expression, so the face actually performs instead of sitting flat (e.g.
   "smug, one eyebrow raised", "cold, jaw tight", "panicked, eyes darting",
@@ -255,8 +280,8 @@ Return ONLY valid JSON with exactly this shape:
   "title": "short episode title",
   "setting": "one line: the real place where this drama happens",
   "scenes": [
-    {"type": "narration", "beat": "intro", "setting": "a fitting place the story put the protagonist (e.g. a holding cell)", "shot": "shot + camera on the lone protagonist", "action": "what the protagonist ALONE physically does while speaking to us (paces, sits, stares out)", "characters": ["Exact Protagonist Name"], "narration": "first-person narration the protagonist speaks to camera", "dialogue": []},
-    {"type": "dialogue", "beat": "setup", "setting": "the real place", "shot": "shot + camera", "action": "blocking for EVERYONE onscreen: each speaker + any silent reactors and what they do", "onscreen": ["Exact Name A", "Exact Name B", "Exact Name C"], "characters": ["Exact Name A", "Exact Name B"], "narration": "", "dialogue": [{"character": "Exact Name A", "line": "what is said", "emotion": "cue", "reaction": "how B silently reacts"}, {"character": "Exact Name B", "line": "reply", "emotion": "cue", "reaction": "how A silently reacts"}]}
+    {"type": "narration", "beat": "intro", "setting": "a fitting place the story put the protagonist (e.g. a holding cell)", "detail": "one object that identifies this place (e.g. a barred cell door, a case bundle)", "time_jump": false, "shot": "shot + camera on the lone protagonist", "action": "what the protagonist ALONE physically does while speaking to us (paces, sits, stares out)", "characters": ["Exact Protagonist Name"], "narration": "first-person narration the protagonist speaks to camera", "dialogue": []},
+    {"type": "dialogue", "beat": "setup", "setting": "the real place", "detail": "one object that identifies this place (e.g. a brass nameplate, a gavel, a stack of case files)", "time_jump": false, "shot": "shot + camera", "action": "blocking for EVERYONE onscreen: each speaker + any silent reactors and what they do", "onscreen": ["Exact Name A", "Exact Name B", "Exact Name C"], "characters": ["Exact Name A", "Exact Name B"], "narration": "", "dialogue": [{"character": "Exact Name A", "line": "what is said", "emotion": "cue", "reaction": "how B silently reacts"}, {"character": "Exact Name B", "line": "reply", "emotion": "cue", "reaction": "how A silently reacts"}]}
   ]
 }
 """
@@ -282,6 +307,10 @@ def clean_scenes(script: dict, valid_names: list = None, lead: str = None) -> di
             "type": stype,
             "beat": sc.get("beat", ""),
             "setting": sc.get("setting", script.get("setting", "")),
+            # One identifying object for the establishing detail shot (Phase 3), and
+            # whether real time passed before this scene (drives the dip-to-black).
+            "detail": (sc.get("detail") or "").strip(),
+            "time_jump": bool(sc.get("time_jump", False)),
             "shot": sc.get("shot", ""),
             "action": sc.get("action", ""),
             "characters": [],   # the SPEAKERS (<=2, get voices)

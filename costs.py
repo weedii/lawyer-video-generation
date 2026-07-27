@@ -113,6 +113,7 @@ SYNC_LIPSYNC_PER_SEC = 0.0117
 # Veo bills per whole 4s/6s/8s block, so a short line still costs its block.
 #     fal.ai/models/fal-ai/veo3.1/fast/image-to-video
 VEO_FAST_AUDIO_PER_SEC = 0.15
+VEO_FAST_NOAUDIO_PER_SEC = 0.10   # silent clips (detail inserts): the cheaper no-audio rate
 
 # ElevenLabs Speech-to-Speech (voice changer): swaps Veo's invented voice for OUR
 # locked character voice while KEEPING the timing, so the lip-sync still matches.
