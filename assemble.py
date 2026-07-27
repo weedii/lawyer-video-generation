@@ -94,7 +94,8 @@ DUCK_RELEASE = 400   # ms to swell back after the voice stops (slow, so it breat
 # reaction is a glance, not a scene. Veo's shortest clip is 4s, so we cap silent
 # beats here so a cutaway doesn't overstay and stall the pace.
 SILENT_MAX = 2.2     # max seconds to hold a silent (reaction/establishing) beat
-INSERT_MAX = 1.4     # a detail insert is a glance at the new place, shorter than a reaction
+INSERT_MAX = 2.8     # the detail insert opens a new place AND carries its location card,
+                     # so it must hold long enough to read the card (not just a glance)
 
 # --- Location cards ---------------------------------------------------------
 # A short place name burned over the first moment of a new location — the Law & Order
@@ -102,8 +103,8 @@ INSERT_MAX = 1.4     # a detail insert is a glance at the new place, shorter tha
 # suits a legal drama. This is NOT a dialogue subtitle (the no-captions rule stands);
 # it is an orientation card, shown only when the location changes and only briefly.
 LOCATION_CARDS = True
-CARD_SECONDS = 1.6           # how long the card stays up
-CARD_FADE = 0.3              # fade in / out of the card
+CARD_SECONDS = 2.6           # how long the card stays up (long enough to comfortably read)
+CARD_FADE = 0.35             # fade in / out of the card
 CARD_FONT = "/System/Library/Fonts/Helvetica.ttc"   # guarded — skipped if missing
 CARD_TIME_WORDS = ("dawn", "morning", "midday", "noon", "afternoon", "dusk",
                    "evening", "night", "midnight", "late")
