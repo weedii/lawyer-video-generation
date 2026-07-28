@@ -45,8 +45,13 @@ OUT_DIR = "output"
 #     scene needs the person in profile or three-quarter, so the face drifts into
 #     someone else. Showing the same person from several sides (plus matching face
 #     close-ups) holds identity across whatever angle a scene calls for.
+#  3) BURNT-IN TEXT. Calling it a "reference sheet" made Nano render a real titled
+#     document — a "CHARACTER REFERENCE: …" header bar across the top. That is not just
+#     ugly: this sheet is fed as a REFERENCE into every scene compose, so any text on it
+#     can bleed into the scenes. So we describe a plain multi-angle STUDY (not a titled
+#     sheet) and forbid ALL text explicitly.
 CHAR_SHEET = (
-    "A professional character reference sheet of ONE person, photorealistic, in the "
+    "A professional multi-angle character study of ONE person, photorealistic, in the "
     "restrained look of a prestige legal TV drama. Lay it out as four columns and "
     "two rows — eight shots of the SAME person. Top row: four FULL-BODY views head "
     "to toe (front, side profile, three-quarter, back), nothing cropped at the head, "
@@ -54,7 +59,9 @@ CHAR_SHEET = (
     "quarter, profile, slight upward angle) with both eyes clear. Identical face, "
     "hair, build and wardrobe in every shot. Flat, even, neutral studio lighting on "
     "a plain light-grey seamless background, no props and no scenery. Sharp facial "
-    "detail."
+    "detail. NO TEXT of any kind anywhere in the image: no title, no header or caption "
+    "bar, no label, no name, no words, no letters, no numbers, no logo, no watermark — "
+    "a purely photographic image with nothing written on it."
 )
 
 
