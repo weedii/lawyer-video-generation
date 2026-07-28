@@ -19,6 +19,7 @@ import os
 import sys
 import json
 import re
+import time
 import requests
 import fal_client
 from dotenv import load_dotenv
@@ -82,8 +83,31 @@ def make_image(prompt: str, out_path: str, aspect_ratio: str = "16:9"):
         with_logs=False,
     )
     url = result["images"][0]["url"]
-    with open(out_path, "wb") as f:
-        f.write(requests.get(url).content)
+    _download(url, out_path)
+
+
+def _download(url: str, out_path: str, tries: int = 4):
+    """Download a generated image, retrying transient network/SSL errors. The image is
+    already generated and PAID before this runs, so a flaky download (a dropped or
+    corrupted TLS packet) must never crash the run or waste the render. We retry the SAME
+    url — no re-generation, so no extra cost — with a timeout, and only fetch the bytes
+    fully BEFORE opening the file, so a mid-transfer failure can't leave a half-written or
+    empty .png behind. Gives up (raising) only after several failed attempts."""
+    last = None
+    for attempt in range(1, tries + 1):
+        try:
+            r = requests.get(url, timeout=120)
+            r.raise_for_status()
+            data = r.content                     # read fully first; raises here on a bad packet
+            with open(out_path, "wb") as f:      # only touch the file once we have all bytes
+                f.write(data)
+            return
+        except Exception as e:
+            last = e
+            print(f"    image download attempt {attempt}/{tries} failed "
+                  f"({type(e).__name__}); retrying in 3s ...")
+            time.sleep(3)
+    raise RuntimeError(f"could not download image after {tries} tries: {last}")
 
 
 def main():
@@ -126,6 +150,16 @@ def main():
             continue
         file_name = f"char_{slug(name)}.png"
         out_path = os.path.join(OUT_DIR, file_name)
+
+        # Resume guard: a portrait already on disk (e.g. from a run that crashed partway,
+        # like a dropped download) is reused for free — record its file and move on, so a
+        # re-run never re-pays Nano for a face we already have. We require a non-empty file:
+        # a crash mid-download could have left a 0-byte stub, and that must be regenerated,
+        # not mistaken for a finished portrait.
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            print(f"- {name} ({c['role']}) — reused, already on disk ($0)")
+            c["file"] = file_name
+            continue
 
         # EVERY used character gets a real, photorealistic locked reference sheet
         # (Nano Banana Pro) — including the hidden-identity people. They are real

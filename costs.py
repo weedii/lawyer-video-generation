@@ -115,6 +115,30 @@ SYNC_LIPSYNC_PER_SEC = 0.0117
 VEO_FAST_AUDIO_PER_SEC = 0.15
 VEO_FAST_NOAUDIO_PER_SEC = 0.10   # silent clips (detail inserts): the cheaper no-audio rate
 
+# Veo 3.1 fast via GOOGLE's Gemini API (google-genai library) instead of fal — our
+# DEFAULT scene provider now. It is the SAME Veo model with the same native lip-sync,
+# but Google prices it lower, so this is a ~33% cut on our single biggest line item:
+#   720p  (audio bundled) = $0.10/s   <- what we use (fal charged $0.15/s for audio)
+#   1080p (audio bundled) = $0.12/s   AND Google forces every 1080p clip to a full 8s
+#                                     block, so a short 4s line would pay for 8s. That
+#                                     wipes out the saving, so we stay at 720p and let
+#                                     the editor upscale to 1080x1920.
+# On Google, audio is ALWAYS bundled — there is no cheaper no-audio rate — so a silent
+# detail insert costs the same $0.10/s as a spoken clip (still <= fal's no-audio rate).
+#     ai.google.dev/gemini-api/docs/pricing
+VEO_GOOGLE_FAST_720P_PER_SEC = 0.10
+VEO_GOOGLE_FAST_1080P_PER_SEC = 0.12
+
+
+def veo_rates(provider: str):
+    """(spoken $/s, silent $/s) for the Veo provider actually in use, so the printed
+    cost stays honest whichever backend rendered the clips. Google bundles audio and has
+    NO separate no-audio discount, so both rates are the flat 720p price; fal discounts
+    silent clips, so its no-audio rate is lower."""
+    if provider == "google":
+        return VEO_GOOGLE_FAST_720P_PER_SEC, VEO_GOOGLE_FAST_720P_PER_SEC
+    return VEO_FAST_AUDIO_PER_SEC, VEO_FAST_NOAUDIO_PER_SEC
+
 # ElevenLabs Speech-to-Speech (voice changer): swaps Veo's invented voice for OUR
 # locked character voice while KEEPING the timing, so the lip-sync still matches.
 # $0.12 / minute of audio = $0.002 / second.

@@ -53,6 +53,10 @@ HARD RULE — FICTIONALIZE EVERY NAME:
   Western one). The story should still feel completely real.
 - Keep everything else true to the article: the events, the legal details, the
   jargon, the drama. Only the names change.
+- KEEP PLACES REAL: do NOT change city, country or region names (e.g. London,
+  Dubai, Birmingham). A place is the story's true SETTING, not an identity to hide,
+  and faking it destroys the authenticity that is the whole hook. Only PEOPLE and the
+  FIRM / company / court names get fictionalised — never the geography.
 
 HOW MANY CHARACTERS:
 - Include EVERY person who matters to the story — no maximum. A story might have
@@ -110,9 +114,26 @@ Return ONLY valid JSON with exactly this shape:
 """
 
 
-def find_real_names(client, story: dict) -> tuple[list[str], float]:
-    """Ask the model to list every real name in the article (first names and
-    surnames, listed separately). We later BAN these words from the output."""
+# The SOURCE publication is where we scraped the article, not a character in it. The
+# name-finder keeps returning it ("RollOnFriday", "ROF", "Above the Law"), and
+# fictionalising it is meaningless — it should never appear in the drama at all. Drop it
+# outright so it never lands in the ban list.
+SOURCE_SITES = frozenset({
+    "rollonfriday", "rof", "abovethelaw", "atl", "above the law",
+    "legalcheek", "legal cheek",
+})
+
+
+def find_real_names(client, story: dict) -> tuple[list[str], list[str], float]:
+    """Find the real names we must FICTIONALISE, returned as TWO separate lists —
+    (people, organisations) — plus the cost. Keeping them apart is what lets the caller
+    show a firm as a firm instead of lumping it under "names" (which made a law firm look
+    like a person's name). The model sorts every proper noun into three groups so we can
+    KEEP places untouched: cities and countries (London, Dubai, Birmingham) are the
+    story's real SETTING, not an identity to hide, and fictionalising them would wreck
+    the authenticity that is the whole hook. We ask for 'places' as its own group ONLY so
+    the model stops lumping them in with names — then we discard that group. The source
+    website is dropped from both lists either way."""
     text = f"{story['title']}\n{story['body']}"
     resp = client.chat.completions.create(
         model=MODEL,
@@ -120,10 +141,22 @@ def find_real_names(client, story: dict) -> tuple[list[str], float]:
             {
                 "role": "system",
                 "content": (
-                    "List every real proper name in this legal article: people, "
-                    "law firms, companies. Split each person's name into separate "
-                    "first-name and surname words. Return ONLY JSON: "
-                    '{"names": ["word", "word", ...]}'
+                    "Read this legal news article and pull out the REAL proper nouns, "
+                    "sorted into three separate groups:\n"
+                    "- people: every real person's name, split into separate first-name "
+                    "and surname words.\n"
+                    "- organizations: the NAMED employer firms, companies, chambers, "
+                    "courts or regulators only (e.g. a law firm's name).\n"
+                    "- places: real cities, countries or regions (e.g. London, Dubai, "
+                    "Birmingham).\n"
+                    "Put each proper noun in EXACTLY ONE group. A city is a place, never "
+                    "an organization. Do NOT list practice areas, departments, teams or "
+                    "legal seats (e.g. 'Real Estate', 'Corporate', 'Litigation'), job "
+                    "titles, or the source website the article was published on (e.g. "
+                    "RollOnFriday, ROF, Above the Law) in ANY group — none of those are "
+                    "names to hide. "
+                    'Return ONLY JSON: {"people": ["word", ...], '
+                    '"organizations": ["name", ...], "places": ["name", ...]}'
                 ),
             },
             {"role": "user", "content": text},
@@ -131,9 +164,16 @@ def find_real_names(client, story: dict) -> tuple[list[str], float]:
         response_format={"type": "json_object"},
         temperature=0,
     )
-    names = json.loads(resp.choices[0].message.content).get("names", [])
+    data = json.loads(resp.choices[0].message.content)
     cost = costs.openai_cost(resp.usage.prompt_tokens, resp.usage.completion_tokens)
-    return names, cost
+    # PLACES are deliberately dropped so the story keeps its true geography (the
+    # London/Dubai/Birmingham contrast that IS the story). The source site is stripped
+    # from both groups too, in case the model listed it despite being told not to.
+    def keep(items):
+        return [str(n) for n in (items or []) if str(n).strip().lower() not in SOURCE_SITES]
+    people = keep(data.get("people"))          # split into first/surname words by the model
+    orgs = keep(data.get("organizations"))     # kept as whole firm names (e.g. "Gowling WLG")
+    return people, orgs, cost
 
 
 # Junk the name-finder produces when it splits ORG names and anonymised labels into
@@ -244,12 +284,23 @@ def analyze(story: dict) -> tuple[dict, float]:
     client = OpenAI(api_key=KEY, timeout=45.0, max_retries=3)
     total_cost = 0.0
 
-    # Step 1: find the real names so we can ban them explicitly, then strip the junk
-    # (initials, common institution words) that would trigger false leak retries.
-    banned, c = find_real_names(client, story)
-    banned = clean_banned(banned)
+    # Step 1: find the real names to fictionalise, kept as two groups (people vs firms) so
+    # we can report them honestly. Firm names are split into their component words for the
+    # ban list — so a partial leak of a multi-word firm ("Gowling" out of "Gowling WLG") is
+    # still caught downstream — while the whole firm name is shown to the user as-is.
+    # clean_banned() then strips junk (initials, generic institution words) that would
+    # otherwise trigger false "leaked name" retries.
+    people, orgs, c = find_real_names(client, story)
     total_cost += c
-    print(f"Real names to replace: {', '.join(banned) if banned else '(none)'}")
+    org_words = [w for org in orgs for w in org.split()]
+    banned = clean_banned(people + org_words)
+    # Print the two kinds SEPARATELY, so a law firm is never displayed as if it were a
+    # person's name (the old "Real names to replace: Gowling, WLG" made exactly that
+    # confusing impression).
+    people_show = clean_banned(people)
+    print(f"Firms to fictionalize:  {', '.join(orgs) if orgs else '(none)'}")
+    print("People to fictionalize: "
+          f"{', '.join(people_show) if people_show else '(none — story names no real people)'}")
 
     # We hand the AI the raw story and comments as plain text.
     user_content = (

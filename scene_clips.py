@@ -34,8 +34,9 @@ Usage:
 Reads:  output/analysis.json   (characters w/ portraits + voice_id, script scenes)
 Output: output/beat_XX_YY.mp4 (dialogue) + clip_XX.mp4 (narration); writes each
         scene's ordered scene["beats"] list + scene["ambient"] bed.
-Cost:   Veo 3.1 fast ~$0.15/s (audio) + ElevenLabs Speech-to-Speech ~$0.002/s +
-        $0.15 per composed scene image + ~$0.002/s ambient beds.
+Cost:   Veo 3.1 fast — $0.10/s via Google (720p, default) or $0.15/s via fal —
+        + ElevenLabs Speech-to-Speech ~$0.002/s + $0.15 per composed scene image
+        + ~$0.002/s ambient beds.
 """
 import os
 import sys
@@ -51,20 +52,48 @@ from dotenv import load_dotenv
 import costs
 
 load_dotenv()
+# Nano Banana (scene composition) and ElevenLabs (re-voice) still run on every path, so
+# their keys are always required — regardless of which backend renders the Veo clips.
 if not os.getenv("FAL_KEY"):
     sys.exit("ERROR: FAL_KEY is empty. Open .env and paste your fal.ai key.")
 ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY")
 if not ELEVEN_KEY:
     sys.exit("ERROR: ELEVENLABS_API_KEY is empty (needed to re-voice into our voices).")
 
+# Which backend renders the Veo SCENE clips (our biggest cost). "google" (default) calls
+# Veo 3.1 fast through Google's own Gemini API at $0.10/s (720p) — the SAME model fal
+# serves, just ~33% cheaper — which is the single largest saving in the pipeline. "fal"
+# keeps the original path. Only the video call moves; images and voices are unchanged.
+VEO_PROVIDER = os.getenv("VEO_PROVIDER", "google").lower()
+GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
+if VEO_PROVIDER == "google" and not GOOGLE_KEY:
+    sys.exit("ERROR: VEO_PROVIDER=google but GOOGLE_API_KEY is empty. Paste a "
+             "BILLING-ENABLED Google AI Studio key in .env (Veo is NOT on the free "
+             "tier), or set VEO_PROVIDER=fal to use the old path.")
+
 OUT_DIR = "output"
-VEO_MODEL = "fal-ai/veo3.1/fast/image-to-video"   # two-person scene + native lip-sync
+VEO_MODEL = "fal-ai/veo3.1/fast/image-to-video"    # fal path: two-person scene + lip-sync
+VEO_MODEL_GOOGLE = "veo-3.1-fast-generate-preview"  # google path: same Veo 3.1 fast, i2v
 SCENE_EDIT_MODEL = "fal-ai/nano-banana-pro/edit"  # compose chars into one shot
 IMAGE_MODEL = "fal-ai/nano-banana-pro"            # text-to-image (detail with no room ref)
 STS_MODEL = "eleven_english_sts_v2"               # ElevenLabs voice changer (keeps timing)
-# 1080p costs the SAME per second as 720p on Veo fast, so we take the sharper one for
-# free. (Only 4K costs more.)
-VEO_RES = "1080p"
+# Resolution differs by backend. On fal, 1080p cost the SAME per second as 720p, so we
+# took the sharper one for free. On Google, 1080p costs MORE and forces every clip to a
+# full 8s block (see costs.py), so the cheap tier is 720p — the editor upscales it to
+# 1080x1920. Pick the right one for the backend in use.
+VEO_RES = "720p" if VEO_PROVIDER == "google" else "1080p"
+
+_genai_client = None
+
+
+def _google_client():
+    """Lazily build ONE Gemini API client, only when the google Veo path is actually
+    used, so a fal-only run never has to import google-genai."""
+    global _genai_client
+    if _genai_client is None:
+        from google import genai
+        _genai_client = genai.Client(api_key=GOOGLE_KEY)
+    return _genai_client
 
 # ONE shared visual look, dropped into EVERY prompt — the character sheet, the composed
 # scene image, and every Veo clip. Reusing the exact same palette/grain/lens wording is
@@ -372,31 +401,34 @@ def _short_err(e) -> str:
 # collected on the next run instead of being submitted — and paid for — a second time.
 VEO_MAX_WAIT = 600        # give one Veo job this long to finish before we stop waiting
 VEO_POLL_EVERY = 5        # ask the queue for its status this often
-VEO_JOBS = os.path.join(OUT_DIR, "_veo_jobs.json")   # out_file -> fal request_id
+VEO_JOBS = os.path.join(OUT_DIR, "_veo_jobs.json")               # fal:    out_file -> request_id
+VEO_JOBS_GOOGLE = os.path.join(OUT_DIR, "_veo_jobs_google.json")  # google: out_file -> operation name
 
 
-def _veo_jobs() -> dict:
-    """The saved out_file -> request_id map of Veo jobs we have paid to start."""
+def _veo_jobs(store: str = VEO_JOBS) -> dict:
+    """The saved out_file -> job-id map of Veo jobs we have paid to start. Kept in a
+    SEPARATE file per backend (fal request_id vs Google operation name) so the two id
+    formats can never be mistaken for one another across a provider switch."""
     try:
-        with open(VEO_JOBS) as f:
+        with open(store) as f:
             return json.load(f)
     except Exception:
         return {}
 
 
-def _remember_veo_job(out_path: str, request_id: str):
+def _remember_veo_job(out_path: str, job_id: str, store: str = VEO_JOBS):
     """Record a submitted job so a later run can collect it for free."""
-    jobs = _veo_jobs()
-    jobs[os.path.basename(out_path)] = request_id
-    with open(VEO_JOBS, "w") as f:
+    jobs = _veo_jobs(store)
+    jobs[os.path.basename(out_path)] = job_id
+    with open(store, "w") as f:
         json.dump(jobs, f, indent=2)
 
 
-def _forget_veo_job(out_path: str):
+def _forget_veo_job(out_path: str, store: str = VEO_JOBS):
     """Drop a job once its video is safely on disk (or is permanently dead)."""
-    jobs = _veo_jobs()
+    jobs = _veo_jobs(store)
     if jobs.pop(os.path.basename(out_path), None) is not None:
-        with open(VEO_JOBS, "w") as f:
+        with open(store, "w") as f:
             json.dump(jobs, f, indent=2)
 
 
@@ -429,7 +461,153 @@ def _await_veo(handle, out_path: str) -> bool:
 
 def make_veo_clip(image_path: str, prompt: str, duration: str, out_path: str,
                   generate_audio: bool = True) -> float:
-    """Animate the start image into a clip with Veo 3.1 fast. For dialogue lines we
+    """Render one Veo 3.1 fast clip from the start image, on whichever backend
+    VEO_PROVIDER selects. Both paths return the billed seconds (0.0 on failure, writing
+    no file, so one bad beat never crashes the run) and both are crash-safe: the job id
+    is saved to disk BEFORE we wait, so a killed run collects the already-paid clip next
+    time instead of paying twice. Google is the cheaper default ($0.10/s vs $0.15/s)."""
+    if VEO_PROVIDER == "google":
+        return _make_veo_clip_google(image_path, prompt, duration, out_path, generate_audio)
+    return _make_veo_clip_fal(image_path, prompt, duration, out_path, generate_audio)
+
+
+def _make_veo_clip_google(image_path: str, prompt: str, duration: str, out_path: str,
+                          generate_audio: bool = True) -> float:
+    """Animate the start image with Veo 3.1 fast via Google's Gemini API. Same model +
+    native lip-sync as the fal path, but Google prices it at $0.10/s (720p). Crash-safety
+    mirrors the fal path: Veo bills the moment Google starts the job and the result only
+    reaches us while we hold the operation, so we persist the operation NAME on disk
+    BEFORE polling — a run killed mid-wait collects the paid video next time for free."""
+    from google.genai import types
+    client = _google_client()
+    secs = float(int(duration[:-1]))
+
+    # First collect anything a previous run already paid for: a job it submitted and then
+    # died waiting on kept running on Google's side, so take that video instead of re-paying.
+    prior = _veo_jobs(VEO_JOBS_GOOGLE).get(os.path.basename(out_path))
+    if prior:
+        try:
+            op = client.operations.get(types.GenerateVideosOperation(name=prior))
+            if _await_veo_google(client, op, out_path):
+                _forget_veo_job(out_path, VEO_JOBS_GOOGLE)
+                print("    (collected the Veo clip a previous run already paid for, $0)")
+                return secs
+        except Exception as e:
+            print(f"    could not collect the earlier Veo job ({_short_err(e)}); re-submitting")
+
+    try:
+        start = types.Image.from_file(location=image_path)
+    except Exception as e:
+        print(f"    veo could not read start image ({_short_err(e)})")
+        return 0.0
+
+    # NOTE on audio: the Gemini Developer API (API-key mode) does NOT accept the
+    # generate_audio parameter — Veo 3.1 here ALWAYS renders its native audio, and
+    # passing the flag is rejected outright. So we never send it. For beats that must be
+    # SILENT (face-free detail inserts, which must not carry Veo's invented sound), we
+    # strip the audio locally after download instead of asking the API to skip it.
+    cfg = types.GenerateVideosConfig(
+        aspect_ratio="9:16",              # vertical TikTok
+        resolution=VEO_RES,               # 720p — the $0.10/s tier
+        duration_seconds=int(duration[:-1]),
+        number_of_videos=1,
+        # Our start image already contains adults, so allow people — otherwise a
+        # face-generation default could reject a dialogue clip outright.
+        person_generation="allow_adult",
+    )
+    for attempt in range(1, 4):
+        try:
+            op = client.models.generate_videos(
+                model=VEO_MODEL_GOOGLE, prompt=prompt, image=start, config=cfg)
+            # Save the operation name BEFORE waiting: from here the job is billable and
+            # must be recoverable even if this process is killed mid-wait.
+            _remember_veo_job(out_path, op.name, VEO_JOBS_GOOGLE)
+            print(f"    veo rendering {duration} clip (job {op.name.split('/')[-1][:8]}, "
+                  f"up to {VEO_MAX_WAIT // 60} min) ...")
+            if _await_veo_google(client, op, out_path):
+                _forget_veo_job(out_path, VEO_JOBS_GOOGLE)
+                # Google always bakes in Veo's audio; if this beat is meant to be silent,
+                # replace that track with silence now (keeps detail inserts truly silent).
+                if not generate_audio:
+                    _mute_clip(out_path)
+                return secs
+            # Timed out. Keep the job id — the next run collects it instead of re-paying.
+            print(f"    veo attempt {attempt} timed out after {VEO_MAX_WAIT // 60} min; "
+                  "job saved, re-run to collect it without paying again")
+            return 0.0
+        except Exception as e:
+            msg = _short_err(e)
+            print(f"    veo attempt {attempt} failed: {msg}")
+            if "content filter" in msg or "content_policy" in msg or "blocked" in msg.lower():
+                return 0.0          # same wording will fail again — give up on this beat
+            time.sleep(5)
+    return 0.0
+
+
+def _await_veo_google(client, op, out_path: str) -> bool:
+    """Poll one Google Veo operation with OUR deadline (a stalled poll can never hang the
+    run), refreshing the long-running operation until it is done. A transient poll failure
+    is ignored and retried — the job keeps running regardless. Returns True once the video
+    is on disk."""
+    deadline = time.time() + VEO_MAX_WAIT
+    while time.time() < deadline:
+        try:
+            op = client.operations.get(op)
+        except Exception:
+            time.sleep(VEO_POLL_EVERY)     # transient — job unaffected, retry
+            continue
+        if op.done:
+            if getattr(op, "error", None):
+                print(f"    veo job failed: {str(op.error)[:140]}")
+                return False
+            return _save_veo_video_google(client, op, out_path)
+        time.sleep(VEO_POLL_EVERY)
+    return False
+
+
+def _save_veo_video_google(client, op, out_path: str) -> bool:
+    """Download the finished MP4 out of a completed Google Veo operation."""
+    resp = getattr(op, "response", None)
+    vids = getattr(resp, "generated_videos", None) if resp else None
+    if not vids:
+        return False
+    vid = vids[0].video
+    try:
+        client.files.download(file=vid)    # populate the bytes (Gemini API)
+    except Exception:
+        pass                               # bytes may already be inline; fall through
+    data = getattr(vid, "video_bytes", None)
+    if data:
+        with open(out_path, "wb") as f:
+            f.write(data)
+    else:
+        vid.save(out_path)                 # SDK writes the downloaded bytes to disk
+    return os.path.exists(out_path)
+
+
+def _mute_clip(path: str) -> bool:
+    """Replace a clip's audio track with silence, in place. Used only on the Google path
+    for silent beats: the Gemini Developer API always bakes Veo's native audio in, so we
+    swap it for a silent stereo track here. We keep a (silent) track rather than dropping
+    audio entirely so every beat still has a matching stream for the editor's concat."""
+    tmp = path + ".mute.mp4"
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", path,
+                        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+                        "-c:v", "copy", "-c:a", "aac", "-map", "0:v:0", "-map", "1:a:0",
+                        "-shortest", tmp], check=True, capture_output=True)
+        os.replace(tmp, path)
+        return True
+    except Exception as e:
+        print(f"    (could not mute detail insert: {e})")
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        return False
+
+
+def _make_veo_clip_fal(image_path: str, prompt: str, duration: str, out_path: str,
+                       generate_audio: bool = True) -> float:
+    """Animate the start image into a clip with Veo 3.1 fast on FAL. For dialogue lines we
     keep generate_audio=True (Veo's own voice + native lip-sync, which we later
     re-voice). For SILENT beats (reaction cutaways) we pass generate_audio=False so
     Veo doesn't invent a voice we'd have to strip. Returns the billed seconds, or
@@ -1127,8 +1305,11 @@ def main():
               f"{' + detail' if insert_beats else ''}")
 
     # --- Cost: dialogue/narration Veo + silent detail Veo + voice swap + sound + images ---
-    veo_cost = veo_seconds * costs.VEO_FAST_AUDIO_PER_SEC
-    detail_veo_cost = detail_veo_seconds * costs.VEO_FAST_NOAUDIO_PER_SEC   # cheaper: no audio
+    # Rates depend on the backend that actually rendered the clips (Google is cheaper and
+    # bundles audio; fal is dearer but discounts silent clips) — see costs.veo_rates.
+    veo_rate, detail_rate = costs.veo_rates(VEO_PROVIDER)
+    veo_cost = veo_seconds * veo_rate
+    detail_veo_cost = detail_veo_seconds * detail_rate
     sts_cost = sts_seconds * costs.ELEVEN_STS_PER_SEC
     sfx_cost = ambient_seconds * costs.ELEVEN_SFX_PER_SEC                   # ambient beds + music
     image_cost = scene_images * costs.NANO_BANANA_PRO_EDIT_PER_IMAGE

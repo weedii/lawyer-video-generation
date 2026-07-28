@@ -128,7 +128,10 @@ INTRODUCE NEW FACES (so the viewer is never confused):
   first line or action — belt and braces on top of the pre-name. Never drop a brand-new
   face into a scene with no context.
 
-STRUCTURE (a real beginning, middle and end) — 5 to 7 SCENES total:
+STRUCTURE (a real beginning, middle and end) — 5 to 7 SCENES total. Let the STORY
+decide how many: a simple story is a tight 5, a rich one with several events earns 7.
+Never pad with a scene the story doesn't need, and never starve a real event to save a
+scene — cover every beat the story genuinely has.
 1. OPEN with exactly one NARRATION scene (beat "intro"): the protagonist, alone in a
    fitting place and doing something, tells us in FIRST PERSON how it began — a
    punchy hook that sets up the scandal.
