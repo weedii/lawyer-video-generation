@@ -520,14 +520,21 @@ def mix_final(joined: str, bed: str):
     lines but never fights a voice."""
     has_music = os.path.exists(MUSIC)
     if not bed and not has_music:              # nothing to lay under -> keep the plain join
-        os.replace(joined, FINAL)
+        # Copy through ffmpeg (not os.replace) with rotation pinned to 0, so this path also
+        # can't inherit the spurious -180 Display Matrix described on the main mix below.
+        run(["ffmpeg", "-y", "-display_rotation", "0", "-i", joined, "-c", "copy", FINAL])
         print("  (no ambient bed or music — kept the plain join)")
         return
 
     # Build the inputs, tracking each one's ffmpeg index. Music is a short loop, so it
     # gets -stream_loop -1 to repeat across the whole runtime; the bed is already full
     # length. -shortest later trims either surplus back to the picture length.
-    inputs, idx = ["-i", joined], 1
+    # -display_rotation 0 on the joined video input forces the OUTPUT to carry NO rotation
+    # flag. This ffmpeg 8.1 build intermittently stamps a spurious -180 "Display Matrix"
+    # onto the copied video during the mix, which flips the whole video upside down in
+    # players even though the pixels themselves are upright. Pinning the input's display
+    # rotation to 0 clears it, deterministically, with no re-encode.
+    inputs, idx = ["-display_rotation", "0", "-i", joined], 1
     bed_i = music_i = None
     if bed:
         inputs += ["-i", bed]; bed_i = idx; idx += 1

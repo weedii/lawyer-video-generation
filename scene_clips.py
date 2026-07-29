@@ -184,6 +184,30 @@ def identity_lock(c: dict) -> str:
 
 # --- Scene image: put the characters together in the setting ---------------
 
+def sheet_ref(sheet_path: str, name: str) -> str:
+    """Crop the FRONT FULL-BODY cell out of a character's 4-column x 2-row reference sheet
+    and return that single clean photo, to be used as the compose reference instead of the
+    whole grid. Cached per character (ref_<name>.png).
+
+    WHY: feeding the entire GRID sheet into nano-banana/edit made the compositor ECHO the
+    layout — a one-person narration shot came back as TWO stacked panels of the same man
+    (walking up top, standing arms-crossed below). A single, non-grid photo has no layout
+    to copy, so the person is composed exactly once. We take the top-left cell because the
+    sheet's top row is the full-body views and column one is the FRONT view — so that cell
+    carries face + build + wardrobe together, the best single identity anchor."""
+    ref = os.path.join(OUT_DIR, f"ref_{slug(name)}.png")
+    if os.path.exists(ref) and os.path.getsize(ref) > 0:
+        return ref
+    try:
+        im = Image.open(sheet_path)
+        w, h = im.size
+        im.crop((0, 0, w // 4, h // 2)).save(ref)   # column 0, row 0 = front full-body
+        return ref
+    except Exception as e:
+        print(f"    (could not crop reference for {name}: {e}); using full sheet")
+        return sheet_path
+
+
 def compose_scene_image(portrait_paths: list, setting: str, shot: str,
                         action: str, out_path: str, room_ref: str = None,
                         people: list = None) -> bool:
@@ -205,12 +229,17 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
     face = ("" if n < 2 else
             f" The {n} people FACE EACH OTHER and look at one another, mid-conversation "
             f"— NOT all looking the same direction, NOT looking at the camera.")
-    # Each person reference is now an 8-shot sheet (the same person from several
-    # angles). Without this the compositor can read the sheet literally and paste the
-    # grid or spawn duplicates, so state that each sheet is one single identity.
-    sheet_note = (" Each person reference is a multi-angle character sheet of ONE "
-                  "individual — render that single person, never the grid layout and "
-                  "never a duplicate of anyone.")
+    # Each reference is now a SINGLE cropped photo (see sheet_ref), not the 8-shot grid —
+    # but keep a hard anti-duplicate instruction so the compositor can never split the
+    # frame into repeated panels of the same person (the stacked-twice bug this replaced).
+    sheet_note = (" Each person reference is ONE photo of ONE individual — render that "
+                  "person exactly once; never duplicate, clone, mirror, split or repeat "
+                  "anyone, and never divide the frame into panels or rows.")
+    # Scene images kept coming back with words baked in (a firm name on the glass, a book
+    # reading "FIRM BRANDED"). Ban all text — it looks fake and, because this image is then
+    # fed as a reference into the video model, any text can bleed onward into the clip.
+    no_text = (" Render NO text, words, letters, numbers, captions, labels, signage, logo "
+               "or watermark anywhere in the image.")
     # Tie each reference photo to a named identity ("the first person is <lock>, the
     # second is <lock>"). Naming each reference separately stops the compositor from
     # blending the two people into one, and repeating each person's clothing colour
@@ -232,7 +261,7 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
             f"location. {only}{face}{sheet_note}{whois} {action}. Keep each person's exact "
             f"face and clothing. {shot}. Vertical 9:16 portrait, upright: the people stand/sit "
             f"in the foreground with heads near the TOP of the frame, the room rising "
-            f"behind and above them. {STYLE}. NOT rotated, NOT sideways, NOT landscape."
+            f"behind and above them. {STYLE}.{no_text} NOT rotated, NOT sideways, NOT landscape."
         )
     else:
         prompt = (
@@ -240,7 +269,7 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
             f"{only}{face}{sheet_note}{whois} {action}. Keep their exact faces and clothing. "
             f"{shot}. Vertical 9:16 portrait, upright: the people stand/sit in the foreground "
             f"with heads near the TOP of the frame, the room rising behind and above them. "
-            f"{STYLE}. NOT rotated, NOT sideways, NOT landscape."
+            f"{STYLE}.{no_text} NOT rotated, NOT sideways, NOT landscape."
         )
     for attempt in range(1, 3):
         p = prompt if attempt == 1 else prompt + " CRITICAL: upright vertical frame."
@@ -859,9 +888,18 @@ def group_shot(names: list, chars_by_name: dict, base_shot: str) -> str:
     if n == 1:
         return base_shot
     if n == 2:
-        parts = [f"medium two-shot, {descriptor(chars_by_name.get(names[0], {}))} "
-                 f"seated on the LEFT, {descriptor(chars_by_name.get(names[1], {}))} "
-                 "seated on the RIGHT, facing each other across a table"]
+        # OVER-THE-SHOULDER framing baked into the STILL (not a mid-clip camera move): the
+        # SECOND person sits in the foreground with their back/shoulder to the lens, the
+        # FIRST faces the camera over that shoulder, in focus. Because the foreground body
+        # is REAL in the composed frame and the video camera then stays locked on it, Veo
+        # never has to invent a shoulder mid-shot — which is what used to clone a person.
+        near = descriptor(chars_by_name.get(names[1], {}))   # foreground, back to camera
+        far = descriptor(chars_by_name.get(names[0], {}))    # faces camera, in focus
+        parts = [f"cinematic over-the-shoulder shot across a table: {near} sits in the "
+                 f"FOREGROUND closest to the camera, seen from BEHIND — only the back of "
+                 f"their head and one shoulder, softly out of focus; {far} sits across from "
+                 f"them and faces toward the camera over that shoulder, in sharp focus with "
+                 f"their whole face clearly visible"]
     else:
         # Name a slot per person, left to right, so nobody is hidden behind anyone else.
         slots = ["on the far LEFT", "LEFT of centre", "RIGHT of centre", "on the far RIGHT"]
@@ -950,13 +988,14 @@ def _reply_cue(c: dict) -> str:
 
 def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
     """One prompt for a WHOLE dialogue scene as a single continuous Veo clip, written
-    as an explicit TIMELINE. Each line gets its own time window and a framing change —
-    a medium two-shot for the first line, a reverse over-the-shoulder on the reply —
-    so the shot cuts between the two faces INSIDE one generation (no glue seam) and
-    each speaker owns a clear slice of time. The per-line windows plus the 'replies'
-    hand-off are what stop Veo from voicing both lines at once and mumbling a garbled
-    bridge between them. Delivery cue and micro-expression ride inside each line so
-    the faces perform."""
+    as an explicit TIMELINE. Each line gets its own time window, but the CAMERA stays
+    ONE locked two-shot for the whole clip — no internal cuts or over-the-shoulder
+    reverse angles. That reframe used to duplicate a person into the foreground (the
+    same character appeared twice mid-clip); a fixed frame can't, so coverage comes from
+    the editor's zoom and the cuts between scenes instead. The per-line windows plus the
+    'replies' hand-off still stop Veo from voicing both lines at once and mumbling a
+    garbled bridge between them. Delivery cue and micro-expression ride inside each line
+    so the faces perform."""
     lines = sc.get("dialogue", [])
     speakers = sc.get("characters", [])
     # Everyone in the frame, not just the talkers: the silent people are composed into
@@ -978,15 +1017,18 @@ def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
     # Whatever time is left after the last word is spoken: name it, so Veo plays it as
     # deliberate silence rather than treating it as space that needs filling with sound.
     tail = max(0.0, veo_secs - total)
-    # A different framing per line so one continuous take still reads as real coverage.
-    # The opening framing has to hold everyone who is in the room, so it widens with
-    # the cast; the later beats push in on faces regardless of how many people there are.
+    # ONE locked framing for the WHOLE clip — deliberately NOT a per-line shot change.
+    # We used to ask Veo for internal CUTS (an over-the-shoulder REVERSE angle on each
+    # reply) to fake real coverage, but that is exactly what CLONES a person: to build an
+    # over-the-shoulder Veo needs a body's shoulder in the foreground, and since both
+    # people are already seated in frame it DUPLICATES one of them to supply it (the same
+    # woman appeared twice mid-clip). A single, stable two-shot never needs a foreground
+    # body, so it cannot clone. The sense of coverage now comes from the editor's slow zoom
+    # and the hard cuts BETWEEN scenes — never from a second camera move inside one clip.
     n_on = len(onscreen)
-    opener = ("Medium two-shot, slow push-in" if n_on <= 2 else
-              f"Medium wide {n_on}-shot holding everyone in the room, slow push-in")
-    shots = [opener,
-             "Reverse over-the-shoulder onto the person being spoken to",
-             "Tighter shot, favouring the speaker"]
+    hold_shot = ("a steady over-the-shoulder shot — one person's shoulder held in the "
+                 "foreground, the other facing the camera in sharp focus" if n_on <= 2 else
+                 f"a steady medium wide {n_on}-shot holding everyone in the room")
     rows = []
     for j, d in enumerate(lines):
         s, e = wins[j]
@@ -995,8 +1037,8 @@ def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
         tone = f" ({d['emotion'].strip()})" if d.get("emotion") else ""
         lead = (f"{spk} says{tone}" if j == 0
                 else f"{_reply_cue(chars_by_name.get(spk_name, {}))}{tone}")
-        rows.append(f"{s:.1f}-{e:.1f}s: {shots[min(j, len(shots) - 1)]} - "
-                    f"{lead}: \"{d.get('line', '')}\".")
+        # Only WHO speaks WHEN — no per-line camera change (that reframe caused the clone).
+        rows.append(f"{s:.1f}-{e:.1f}s: {lead}: \"{d.get('line', '')}\".")
     # CAST block: pin EVERY on-screen person to their locked identity (hair, build,
     # CLOTHING COLOUR) so the reverse angle can't redraw the wrong face or recolour an
     # outfit. Silent people need this as much as speakers — they're on camera too.
@@ -1020,21 +1062,28 @@ def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
     if tail >= 0.4:
         tail_line = (f"\n{total:.1f}-{veo_secs:.1f}s: Hold on the faces in silence — "
                      "nobody speaks, no words at all, just the reaction settling.")
-    # Declare the cut count up front (like a shot list header) so the model plans real
-    # cuts across the timeline instead of drifting through one unbroken take.
-    cuts = len(rows)
     # "Facing each other" only makes sense for a pair; a group turns toward whoever
     # holds the floor. Either way, nobody looks down the lens (that's the narrator's job).
     if len(onscreen) <= 2:
-        staging = "two people mid-conversation, facing EACH OTHER, never the camera"
+        staging = ("two people mid-conversation in an over-the-shoulder framing — the person "
+                   "facing the camera looks at the foreground person beside the lens, never "
+                   "straight into the lens")
     else:
         staging = (f"{len(onscreen)} people in one conversation, turned toward whoever "
                    "is speaking, never the camera")
     return (
         # Lead with motion so Veo doesn't open on a frozen staring frame.
-        f"{veo_secs} seconds / {cuts} CUTS / intimate cinematic legal drama / no music.\n"
+        f"{veo_secs} seconds / ONE continuous LOCKED shot, no cuts / intimate cinematic "
+        f"legal drama / no music.\n"
         f"A continuous cinematic scene, already in motion from the first frame — "
         f"{staging}. "
+        # ONE fixed camera for the whole clip. The over-the-shoulder/reverse reframe is
+        # banned here because building it makes Veo duplicate a person into the foreground.
+        f"CAMERA: {hold_shot}, held as ONE fixed angle for the entire clip with at most a "
+        f"very slight, slow push-in. The camera does NOT cut, swing, orbit, or change to a "
+        f"different angle — it holds this single framing the whole time. The foreground "
+        f"person keeps their back to the camera throughout; do NOT turn them around, and do "
+        f"NOT add, duplicate or reveal any second copy of anyone. "
         f"{STYLE}, natural room ambience.\n"
         f"CAST: {cast}\n"
         "TIMELINE:\n" + "\n".join(rows) + tail_line +
@@ -1048,7 +1097,13 @@ def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
         "stays seated, whoever is standing stays standing; nobody stands up, sits down or "
         "walks off, and no furniture or object appears, vanishes or changes place. "
         "Nuanced facial micro-expressions, real weighty movement and object physics, "
-        "every person's face and clothing colour identical throughout, movie-level subtlety."
+        "every person's face and clothing colour identical throughout, movie-level subtlety. "
+        # Veo tends to briefly CLONE a person mid-clip when the camera reframes (a second
+        # copy of the same person flickers in during the angle change, then resolves). Name
+        # it so the model holds one stable body per person through the move.
+        "Exactly one of each person on screen at all times — as the camera moves or changes "
+        "angle, NEVER duplicate, clone, split, mirror or ghost a person; keep stable, "
+        "continuous geometry with the same single body for each person throughout."
     )
 
 
@@ -1135,7 +1190,11 @@ def main():
             if not names:
                 print(f"  [{i}] DIALOGUE skipped: no character images.")
                 continue
-        portraits = [os.path.join(OUT_DIR, chars_by_name[n]["file"]) for n in names]
+        # Use a single cropped FRONT view per character as the compose reference, NOT the
+        # whole 4x2 sheet — see sheet_ref: the grid made the compositor stack the same
+        # person twice on solo (narration) shots.
+        portraits = [sheet_ref(os.path.join(OUT_DIR, chars_by_name[n]["file"]), n)
+                     for n in names]
 
         loc_key = sc_setting.strip().lower()
 
