@@ -109,13 +109,26 @@ KLING_V3_STD_VOICE_PER_SEC = 0.154
 #     fal.ai/models/fal-ai/kling-video/create-voice
 KLING_CREATE_VOICE_PER = 0.007
 
-# Sync lipsync (fal-ai/sync-lipsync): takes a VIDEO + our voice and redoes the
-# MOUTH to match. We run it AFTER Seedance so a moving clip (character stands up,
-# gestures) also lip-syncs our ElevenLabs voice. This is the "two models on one
-# clip" combo: Seedance acts the body, Sync fixes the lips.
-#   $0.70 / minute  =  $0.0117 / second of output video.
-#     fal.ai/models/fal-ai/sync-lipsync
+# Sync lipsync 1.x (fal-ai/sync-lipsync): legacy, kept for reference. $0.0117/s.
 SYNC_LIPSYNC_PER_SEC = 0.0117
+
+# --- Re-dub / lip-sync (fal) — the current dialogue+narration fix -----------
+# We render Seedance WITH audio (mouths already moving), then RE-DUB the mouths onto our
+# CORRECT ElevenLabs words. Two tools by face count:
+#   Sync Lipsync 2.0 (fal-ai/sync-lipsync/v2) — DIALOGUE (2 faces). Its active-speaker
+#     detection maps each voice to the right face. $3.00 / minute = $0.05 / output second.
+#       fal.ai/models/fal-ai/sync-lipsync/v2
+SYNC_LIPSYNC2_PER_SEC = 0.05
+#   LatentSync (fal-ai/latentsync) — NARRATION (1 face), cheaper. Flat $0.20 for clips up to
+#     40s, then $0.005/s beyond. Our narration clips are < 40s, so it's a flat $0.20 each.
+#       fal.ai/models/fal-ai/latentsync
+LATENTSYNC_FLAT = 0.20
+LATENTSYNC_OVER_40_PER_SEC = 0.005
+
+# ElevenLabs Text-to-Speech: makes the CORRECT words in each character's fixed voice (the
+# input to the re-dub). eleven_multilingual_v2 = $0.10 / 1,000 characters. Tiny per line.
+#     elevenlabs.io/docs/api-reference/text-to-speech
+ELEVEN_TTS_PER_1K_CHARS = 0.10
 
 # (Veo 3.1 fast — via fal and via Google's Gemini API — was the previous scene model.
 # It was dropped for Seedance 1.5 pro above: Veo's likeness filter blocked our AI faces

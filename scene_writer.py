@@ -5,7 +5,7 @@ where the characters ACT and talk TO EACH OTHER — like a real short film —
 instead of one avatar talking to camera per line.
 
 It reads the analyzed story + characters AND the raw scraped story, then writes
-5-7 scenes with a real arc, in a first-person MEMOIR style:
+6-8 scenes with a real arc, in a first-person MEMOIR style:
   - a NARRATION hook to open — the PROTAGONIST, alone and doing something in a
     fitting place, tells us in first person how it began (looking at camera),
   - DIALOGUE scenes that dramatize the REAL events (two people in one room, never
@@ -128,14 +128,14 @@ INTRODUCE NEW FACES (so the viewer is never confused):
   first line or action — belt and braces on top of the pre-name. Never drop a brand-new
   face into a scene with no context.
 
-STRUCTURE (a real beginning, middle and end) — 5 to 7 SCENES total. Let the STORY
-decide how many: a simple story is a tight 5, a rich one with several events earns 7.
+STRUCTURE (a real beginning, middle and end) — 6 to 8 SCENES total. Let the STORY
+decide how many: a simple story is a tight 6, a rich one with several events earns 8.
 Never pad with a scene the story doesn't need, and never starve a real event to save a
 scene — cover every beat the story genuinely has.
 1. OPEN with exactly one NARRATION scene (beat "intro"): the protagonist, alone in a
    fitting place and doing something, tells us in FIRST PERSON how it began — a
    punchy hook that sets up the scandal.
-2. MIDDLE: 3 to 4 DIALOGUE scenes that DRAMATIZE THE REAL EVENTS, building through
+2. MIDDLE: 4 to 5 DIALOGUE scenes that DRAMATIZE THE REAL EVENTS, building through
    the beats "setup" -> "escalation" -> "twist". Give ONE scene per DISTINCT EVENT
    or place (e.g. the train exchange = ONE scene, the messages fallout = ONE scene,
    the tribunal = ONE scene) — do NOT split a single event into several scenes just
