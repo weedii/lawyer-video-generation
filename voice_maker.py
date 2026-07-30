@@ -1,6 +1,6 @@
-"""STAGE 2 - STEP 2: Assign a fixed voice to every character (Veo + our-voice pipeline).
+"""STAGE 2 - STEP 2: Assign a fixed voice to every character (Seedance + our-voice pipeline).
 
-The scene clips are made by Veo (which invents its own voice per clip) and then
+The scene clips are made by Seedance (which invents its own voice per clip) and then
 RE-VOICED into OUR voice with ElevenLabs Speech-to-Speech (in scene_clips.py).
 For that we just need to decide, ONCE, which ElevenLabs voice each character owns
 — the same voice every time, so a character sounds identical across the whole

@@ -1,4 +1,4 @@
-"""STAGE 2 - STEP 3: Make one cinematic CLIP per SCENE (Veo + our-voice pipeline).
+"""STAGE 2 - STEP 3: Make one cinematic CLIP per SCENE (Seedance + our-voice pipeline).
 
 The unit is a SCENE — a real short-film shot where the characters act and talk TO
 EACH OTHER in the same room. Two kinds of scene:
@@ -6,36 +6,42 @@ EACH OTHER in the same room. Two kinds of scene:
   DIALOGUE scene:
     1. Compose ONE image with the scene's on-screen cast together in the setting
        (Nano Banana Pro edit, using their locked portraits so faces stay the same).
-    2. Render ONE Veo 3.1 clip PER LINE: the speaker acts and says that line while
-       the others stay in frame reacting (Veo animates + speaks it in ITS OWN
-       voice, with native lip-sync). Because each clip has ONE speaker, we then
-    3. RE-VOICE it into OUR locked ElevenLabs voice with Speech-to-Speech, which
-       keeps the exact timing so the lip-sync still matches.
-    Each line stays its OWN clip (a "beat") — we do NOT join them here. The editor
-    (assemble.py) joins the beats with a continuous ambient bed and soft/staggered
-    cuts, which is what makes the conversation read as one smooth scene.
+    2. Render ONE Seedance 1.5 pro clip for the WHOLE scene: both people act and
+       say their lines in a single generation (Seedance animates + speaks it in ITS
+       OWN invented voice, with native lip-sync). We keep those native voices for
+       dialogue — pulling two speakers apart to swap in our cloned voices would need
+       per-speaker diarisation (a later upgrade).
+    Each scene is one clip (a "beat"). The editor (assemble.py) joins the beats with
+    a continuous ambient bed and soft/staggered cuts, which is what makes the
+    conversation read as one smooth scene.
 
   NARRATION scene (hook / bridge / cliffhanger) — MEMOIR style:
     The lone PROTAGONIST performs the narration straight to camera (first person),
-    one Veo clip (one beat), re-voiced into their own ElevenLabs voice.
+    one Seedance clip (one beat), then RE-VOICED into their own locked ElevenLabs
+    voice with Speech-to-Speech (which keeps the exact timing so the lip-sync still
+    matches). Re-voicing only the recurring narrator keeps the lead's voice
+    consistent across every video without needing to split a two-speaker clip.
 
 We also generate ONE looping ambient bed per location (ElevenLabs Sound-Effects)
 and record it on each scene, so the editor can lay continuous room tone under the
 cuts.
 
-Why this shape: Veo gives the best two-people-in-one-shot acting + lip-sync, but
-its voice is invented and drifts. Speech-to-Speech swaps it for our consistent
-per-character voice without breaking the lips (timing preserved). Result: two
-actors in one room + our voices + consistency.
+Why Seedance (and not Veo): Veo's likeness filter refuses our AI-invented faces on
+~half of all clips (a Google policy that fires on fal, the Gemini API AND Vertex —
+not promptable-around). Seedance 1.5 pro holds the same two faces, does native
+lip-sync, is NOT blocked, and is far cheaper ($0.052/s vs Veo's $0.10-0.15/s), so a
+whole video comes in under budget. It runs on fal's queue, so the crash-safe
+submit/poll/resume machinery below is unchanged.
 
 Usage:
     python scene_clips.py
 
 Reads:  output/analysis.json   (characters w/ portraits + voice_id, script scenes)
-Output: output/beat_XX_YY.mp4 (dialogue) + clip_XX.mp4 (narration); writes each
-        scene's ordered scene["beats"] list + scene["ambient"] bed.
-Cost:   Veo 3.1 fast — $0.10/s via Google (720p, default) or $0.15/s via fal —
-        + ElevenLabs Speech-to-Speech ~$0.002/s + $0.15 per composed scene image
+Output: output/clip_XX.mp4 (one per scene) + insert_XX.mp4 (detail beats); writes
+        each scene's ordered scene["beats"] list + scene["ambient"] bed.
+Cost:   Seedance 1.5 pro (fal) — $0.052/s at 720p WITH audio (spoken scenes),
+        $0.026/s WITHOUT audio (silent detail inserts) — + ElevenLabs
+        Speech-to-Speech ~$0.002/s + $0.15 per composed scene image
         + ~$0.002/s ambient beds.
 """
 import os
@@ -52,51 +58,34 @@ from dotenv import load_dotenv
 import costs
 
 load_dotenv()
-# Nano Banana (scene composition) and ElevenLabs (re-voice) still run on every path, so
-# their keys are always required — regardless of which backend renders the Veo clips.
+# Nano Banana (scene composition), Seedance (video) and ElevenLabs (re-voice) all run on
+# fal / ElevenLabs, so both keys are always required.
 if not os.getenv("FAL_KEY"):
     sys.exit("ERROR: FAL_KEY is empty. Open .env and paste your fal.ai key.")
 ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY")
 if not ELEVEN_KEY:
     sys.exit("ERROR: ELEVENLABS_API_KEY is empty (needed to re-voice into our voices).")
 
-# Which backend renders the Veo SCENE clips (our biggest cost). "google" (default) calls
-# Veo 3.1 fast through Google's own Gemini API at $0.10/s (720p) — the SAME model fal
-# serves, just ~33% cheaper — which is the single largest saving in the pipeline. "fal"
-# keeps the original path. Only the video call moves; images and voices are unchanged.
-VEO_PROVIDER = os.getenv("VEO_PROVIDER", "google").lower()
-GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
-if VEO_PROVIDER == "google" and not GOOGLE_KEY:
-    sys.exit("ERROR: VEO_PROVIDER=google but GOOGLE_API_KEY is empty. Paste a "
-             "BILLING-ENABLED Google AI Studio key in .env (Veo is NOT on the free "
-             "tier), or set VEO_PROVIDER=fal to use the old path.")
-
 OUT_DIR = "output"
-VEO_MODEL = "fal-ai/veo3.1/fast/image-to-video"    # fal path: two-person scene + lip-sync
-VEO_MODEL_GOOGLE = "veo-3.1-fast-generate-preview"  # google path: same Veo 3.1 fast, i2v
+# The SCENE video model — our biggest cost. Seedance 1.5 pro (image-to-video) replaced
+# Veo 3.1: Veo's likeness filter refused our AI-invented faces on ~half of clips (a
+# Google policy, not promptable-around), and it cost $0.10-0.15/s. Seedance holds the
+# same two faces, does native lip-sync, is NOT blocked, and is ~$0.052/s — so a whole
+# video comes in under budget. It runs on fal's own queue, so all the crash-safe
+# submit/poll/resume code below is the SAME machinery, just pointed at a new model.
+VIDEO_MODEL = "fal-ai/bytedance/seedance/v1.5/pro/image-to-video"
 SCENE_EDIT_MODEL = "fal-ai/nano-banana-pro/edit"  # compose chars into one shot
 IMAGE_MODEL = "fal-ai/nano-banana-pro"            # text-to-image (detail with no room ref)
 STS_MODEL = "eleven_english_sts_v2"               # ElevenLabs voice changer (keeps timing)
-# Resolution differs by backend. On fal, 1080p cost the SAME per second as 720p, so we
-# took the sharper one for free. On Google, 1080p costs MORE and forces every clip to a
-# full 8s block (see costs.py), so the cheap tier is 720p — the editor upscales it to
-# 1080x1920. Pick the right one for the backend in use.
-VEO_RES = "720p" if VEO_PROVIDER == "google" else "1080p"
-
-_genai_client = None
-
-
-def _google_client():
-    """Lazily build ONE Gemini API client, only when the google Veo path is actually
-    used, so a fal-only run never has to import google-genai."""
-    global _genai_client
-    if _genai_client is None:
-        from google import genai
-        _genai_client = genai.Client(api_key=GOOGLE_KEY)
-    return _genai_client
+# 720p is Seedance's balanced tier and the price we budgeted ($0.052/s with audio); the
+# editor upscales the final cut to 1080x1920. Seedance IGNORES the input image's shape
+# and defaults to 16:9 landscape, so aspect_ratio="9:16" MUST be sent on every call
+# (verified: without it a vertical start image still came out landscape).
+VIDEO_RES = "720p"
+VIDEO_ASPECT = "9:16"
 
 # ONE shared visual look, dropped into EVERY prompt — the character sheet, the composed
-# scene image, and every Veo clip. Reusing the exact same palette/grain/lens wording is
+# scene image, and every Seedance clip. Reusing the exact same palette/grain/lens wording is
 # what makes separate generations read as a single film instead of clips from different
 # cameras, and it softens the jump between scenes. Kept in one place so it can never
 # drift out of sync between the steps.
@@ -124,15 +113,15 @@ DRAFT = os.getenv("DRAFT") == "1"
 # (e.g. a real crop of the wide, or a start+end-frame model).
 COVERAGE = False          # compose singles + establishing wide (shot/reverse-shot)
 REACTIONS = False         # insert silent listener reaction cutaways between lines
-REACTION_DUR = "4s"       # Veo's shortest block; the editor caps silent beats short
+REACTION_DUR = "5s"       # Seedance's shortest safe length; the editor caps silent beats short
 # DETAIL INSERT: at each NEW location we open on a short, silent, face-free shot of one
 # object that says where we are (a gavel, a nameplate, a case bundle) — the modern
 # replacement for the establishing wide. It orients the viewer before the scene starts,
 # and because it has no faces nothing can drift. One Nano image ($0.15) + one 4s silent
-# Veo clip ($0.40) per location, cached so we pay once per place. This is real footage,
+# Seedance clip ($0.40) per location, cached so we pay once per place. This is real footage,
 # not a frozen still — that is why the old still-zoom establishing beat was removed.
 DETAIL_INSERTS = True
-DETAIL_DUR = "4s"         # Veo's shortest block; the editor trims it to a ~1.2s glance
+DETAIL_DUR = "5s"         # Seedance's shortest safe length; the editor trims it to a ~1.2s glance
 
 
 def slug(name: str) -> str:
@@ -334,8 +323,8 @@ def compose_detail_image(detail: str, setting: str, room_ref: str, out_path: str
 
 def make_detail_insert(i: int, detail: str, setting: str, room_ref: str):
     """Build the establishing detail beat for a new location: compose a face-free object
-    image (Nano) and animate it as a short SILENT Veo clip. Returns
-    (beat_or_None, images_paid, veo_seconds). Resume-guarded on both the image and the
+    image (Nano) and animate it as a short SILENT Seedance clip. Returns
+    (beat_or_None, images_paid, video_seconds). Resume-guarded on both the image and the
     clip, so a re-run collects finished work for free. A failure at either step returns
     no beat — the scene simply opens on its dialogue instead."""
     if not DETAIL_INSERTS or not detail:
@@ -356,7 +345,7 @@ def make_detail_insert(i: int, detail: str, setting: str, room_ref: str):
         images_paid = 1
     # Silent (generate_audio=False): a detail shot has no voice, and the editor holds
     # it only ~1.2s, so 4s is plenty and it bills at the cheaper no-audio rate.
-    secs = make_veo_clip(img, detail_insert_prompt(detail, setting), DETAIL_DUR,
+    secs = make_video_clip(img, detail_insert_prompt(detail, setting), DETAIL_DUR,
                          clip_path, generate_audio=False)
     if secs == 0.0 or not os.path.exists(clip_path):
         return None, images_paid, 0.0
@@ -364,7 +353,7 @@ def make_detail_insert(i: int, detail: str, setting: str, room_ref: str):
 
 
 def detail_insert_prompt(detail: str, setting: str) -> str:
-    """Veo prompt for the silent detail beat: a slow, quiet push-in on the object, no
+    """Seedance prompt for the silent detail beat: a slow, quiet push-in on the object, no
     people, tiny real-world motion so it reads as footage rather than a frozen still."""
     obj = (detail or "the object").strip().rstrip(".")
     place = (setting or "the room").strip().rstrip(".")
@@ -374,20 +363,21 @@ def detail_insert_prompt(detail: str, setting: str) -> str:
             f"movement from the first frame. {STYLE}. No text.")
 
 
-# --- Veo clip + re-voice ---------------------------------------------------
+# --- Seedance clip + re-voice ---------------------------------------------------
 
-def veo_duration(text: str) -> str:
-    """Pick a Veo length (4s/6s/8s — Veo only allows these) for one spoken line."""
+def clip_duration(text: str) -> str:
+    """Pick a clip length for one spoken line. Seedance accepts 5-10s, so we use 5/6/8
+    (5s is the shortest safe value — a shorter request can be rejected)."""
     n = len((text or "").split())
     secs = n / 2.5 + 1.5           # ~2.5 words/sec + a little air
-    return "4s" if secs <= 4 else "6s" if secs <= 6 else "8s"
+    return "5s" if secs <= 5 else "6s" if secs <= 6 else "8s"
 
 
 def _line_windows(lines: list):
     """Give each dialogue line its own time slice (~2.5 words/sec, min 1.8s so even a
-    short line has room to land) plus the running total, clamped to Veo's 8s ceiling.
+    short line has room to land) plus the running total, clamped to Seedance's 8s ceiling.
     These slices become an explicit timeline in the prompt. Without a per-speaker time
-    budget Veo tries to voice both lines at once, rushes the hand-off, and fills the
+    budget Seedance tries to voice both lines at once, rushes the hand-off, and fills the
     seam with a garbled beat where one person's voice comes out of the other's mouth.
     A timeline hands each speaker a clear window instead."""
     wins, t = [], 0.0
@@ -404,12 +394,12 @@ def _line_windows(lines: list):
     return wins, min(t, 8.0)
 
 
-def scene_veo_duration(lines: list) -> str:
-    """Veo length for a whole dialogue scene: match the summed line windows so the
-    clip is only as long as the actual speech. Leaving an empty tail is what lets Veo
-    invent extra mumbling to fill it, so we size tight. Clamped to Veo's 4/6/8s."""
+def scene_duration(lines: list) -> str:
+    """Clip length for a whole dialogue scene: match the summed line windows so the
+    clip is only as long as the actual speech. Leaving an empty tail is what lets the
+    model invent extra mumbling to fill it, so we size tight. Clamped to 5/6/8s."""
     _, total = _line_windows(lines)
-    return "4s" if total <= 4.5 else "6s" if total <= 6.5 else "8s"
+    return "5s" if total <= 5.5 else "6s" if total <= 6.5 else "8s"
 
 
 def _short_err(e) -> str:
@@ -417,54 +407,55 @@ def _short_err(e) -> str:
     s = str(e)
     low = s.lower()
     if "content_policy" in low or "content checker" in low or "flagged" in low:
-        return "blocked by Veo's content filter (wording too explicit)"
+        return "blocked by Seedance's content filter (wording too explicit)"
     return s[:140]
 
 
-# A Veo generation is the one call we CANNOT afford to lose: it is billed the moment
+# A Seedance generation is the one call we CANNOT afford to lose: it is billed the moment
 # fal starts it, and the result only reaches us if we are still listening. fal_client's
 # subscribe() polls the queue in a loop with no overall deadline, so a stalled poll
 # leaves it waiting forever (it hung a real run for 23 minutes on a dead connection).
 # We therefore submit the job ourselves and poll with our own deadline. Crucially we
 # record the request_id on disk BEFORE waiting: a job we already paid for can then be
 # collected on the next run instead of being submitted — and paid for — a second time.
-VEO_MAX_WAIT = 600        # give one Veo job this long to finish before we stop waiting
-VEO_POLL_EVERY = 5        # ask the queue for its status this often
-VEO_JOBS = os.path.join(OUT_DIR, "_veo_jobs.json")               # fal:    out_file -> request_id
-VEO_JOBS_GOOGLE = os.path.join(OUT_DIR, "_veo_jobs_google.json")  # google: out_file -> operation name
+VIDEO_MAX_WAIT = 600      # give one clip this long to finish before we stop waiting
+VIDEO_POLL_EVERY = 5      # ask the queue for its status this often
+VIDEO_JOBS = os.path.join(OUT_DIR, "_video_jobs.json")   # out_file -> fal request_id
 
 
-def _veo_jobs(store: str = VEO_JOBS) -> dict:
-    """The saved out_file -> job-id map of Veo jobs we have paid to start. Kept in a
-    SEPARATE file per backend (fal request_id vs Google operation name) so the two id
-    formats can never be mistaken for one another across a provider switch."""
+def _video_jobs() -> dict:
+    """The saved out_file -> fal request_id map of clips we have paid to start, so a run
+    killed mid-wait can collect the finished video next time instead of paying twice."""
     try:
-        with open(store) as f:
+        with open(VIDEO_JOBS) as f:
             return json.load(f)
     except Exception:
         return {}
 
 
-def _remember_veo_job(out_path: str, job_id: str, store: str = VEO_JOBS):
+def _remember_video_job(out_path: str, job_id: str):
     """Record a submitted job so a later run can collect it for free."""
-    jobs = _veo_jobs(store)
+    jobs = _video_jobs()
     jobs[os.path.basename(out_path)] = job_id
-    with open(store, "w") as f:
+    with open(VIDEO_JOBS, "w") as f:
         json.dump(jobs, f, indent=2)
 
 
-def _forget_veo_job(out_path: str, store: str = VEO_JOBS):
+def _forget_video_job(out_path: str):
     """Drop a job once its video is safely on disk (or is permanently dead)."""
-    jobs = _veo_jobs(store)
+    jobs = _video_jobs()
     if jobs.pop(os.path.basename(out_path), None) is not None:
-        with open(store, "w") as f:
+        with open(VIDEO_JOBS, "w") as f:
             json.dump(jobs, f, indent=2)
 
 
-def _save_veo_video(result: dict, out_path: str) -> bool:
-    """Download the finished video out of a fal result payload."""
+def _save_video(result: dict, out_path: str) -> bool:
+    """Download the finished video out of a fal result payload. Seedance returns
+    {"video": {"url": ...}}; we also accept a {"videos": [...]} list defensively."""
     video = result.get("video")
-    url = video["url"] if isinstance(video, dict) else video
+    if not video and result.get("videos"):
+        video = result["videos"][0]
+    url = video.get("url") if isinstance(video, dict) else video
     if not url:
         return False
     with open(out_path, "wb") as f:
@@ -472,206 +463,28 @@ def _save_veo_video(result: dict, out_path: str) -> bool:
     return os.path.exists(out_path)
 
 
-def _await_veo(handle, out_path: str) -> bool:
-    """Wait for one submitted Veo job, polling with OUR deadline so a stalled queue
-    poll can never hang the run. A failed poll is ignored and retried — the job keeps
-    running on fal's side regardless of whether we are listening. Returns True if the
-    video landed on disk."""
-    deadline = time.time() + VEO_MAX_WAIT
+def _await_video(handle, out_path: str) -> bool:
+    """Wait for one submitted job, polling with OUR deadline so a stalled queue poll can
+    never hang the run. A failed poll is ignored and retried — the job keeps running on
+    fal's side regardless of whether we are listening. Returns True if the video landed
+    on disk."""
+    deadline = time.time() + VIDEO_MAX_WAIT
     while time.time() < deadline:
         try:
             if isinstance(handle.status(), fal_client.Completed):
-                return _save_veo_video(handle.get(), out_path)
+                return _save_video(handle.get(), out_path)
         except Exception:
             pass          # transient poll failure — the job is unaffected, just retry
-        time.sleep(VEO_POLL_EVERY)
+        time.sleep(VIDEO_POLL_EVERY)
     return False
 
 
-def make_veo_clip(image_path: str, prompt: str, duration: str, out_path: str,
-                  generate_audio: bool = True) -> float:
-    """Render one Veo 3.1 fast clip from the start image, on whichever backend
-    VEO_PROVIDER selects. Both paths return the billed seconds (0.0 on failure, writing
-    no file, so one bad beat never crashes the run) and both are crash-safe: the job id
-    is saved to disk BEFORE we wait, so a killed run collects the already-paid clip next
-    time instead of paying twice. Google is the cheaper default ($0.10/s vs $0.15/s)."""
-    if VEO_PROVIDER == "google":
-        return _make_veo_clip_google(image_path, prompt, duration, out_path, generate_audio)
-    return _make_veo_clip_fal(image_path, prompt, duration, out_path, generate_audio)
-
-
-def _make_veo_clip_google(image_path: str, prompt: str, duration: str, out_path: str,
-                          generate_audio: bool = True) -> float:
-    """Animate the start image with Veo 3.1 fast via Google's Gemini API. Same model +
-    native lip-sync as the fal path, but Google prices it at $0.10/s (720p). Crash-safety
-    mirrors the fal path: Veo bills the moment Google starts the job and the result only
-    reaches us while we hold the operation, so we persist the operation NAME on disk
-    BEFORE polling — a run killed mid-wait collects the paid video next time for free."""
-    from google.genai import types
-    client = _google_client()
-    secs = float(int(duration[:-1]))
-
-    # First collect anything a previous run already paid for: a job it submitted and then
-    # died waiting on kept running on Google's side, so take that video instead of re-paying.
-    prior = _veo_jobs(VEO_JOBS_GOOGLE).get(os.path.basename(out_path))
-    if prior:
-        try:
-            op = client.operations.get(types.GenerateVideosOperation(name=prior))
-            status = _await_veo_google(client, op, out_path)
-            if status == "ok":
-                _forget_veo_job(out_path, VEO_JOBS_GOOGLE)
-                if not generate_audio:
-                    _mute_clip(out_path)
-                print("    (collected the Veo clip a previous run already paid for, $0)")
-                return secs
-            if status == "timeout":
-                print("    (the earlier Veo job is still rendering; re-run later to collect it)")
-                return 0.0
-            # blocked/failed: the earlier job produced NO video, so it is dead — drop it
-            # (there is nothing to collect) and generate a fresh one below.
-            _forget_veo_job(out_path, VEO_JOBS_GOOGLE)
-            print("    (the earlier Veo job produced no video; regenerating)")
-        except Exception as e:
-            print(f"    could not collect the earlier Veo job ({_short_err(e)}); re-submitting")
-
-    try:
-        start = types.Image.from_file(location=image_path)
-    except Exception as e:
-        print(f"    veo could not read start image ({_short_err(e)})")
-        return 0.0
-
-    # NOTE on audio: the Gemini Developer API (API-key mode) does NOT accept the
-    # generate_audio parameter — Veo 3.1 here ALWAYS renders its native audio, and
-    # passing the flag is rejected outright. So we never send it. For beats that must be
-    # SILENT (face-free detail inserts, which must not carry Veo's invented sound), we
-    # strip the audio locally after download instead of asking the API to skip it.
-    cfg = types.GenerateVideosConfig(
-        aspect_ratio="9:16",              # vertical TikTok
-        resolution=VEO_RES,               # 720p — the $0.10/s tier
-        duration_seconds=int(duration[:-1]),
-        number_of_videos=1,
-        # Our start image already contains adults, so allow people — otherwise a
-        # face-generation default could reject a dialogue clip outright.
-        person_generation="allow_adult",
-    )
-    for attempt in range(1, 4):
-        try:
-            op = client.models.generate_videos(
-                model=VEO_MODEL_GOOGLE, prompt=prompt, image=start, config=cfg)
-            # Save the operation name BEFORE waiting: from here the job is billable and
-            # must be recoverable even if this process is killed mid-wait.
-            _remember_veo_job(out_path, op.name, VEO_JOBS_GOOGLE)
-            print(f"    veo rendering {duration} clip (job {op.name.split('/')[-1][:8]}, "
-                  f"up to {VEO_MAX_WAIT // 60} min) ...")
-            status = _await_veo_google(client, op, out_path)
-            if status == "ok":
-                _forget_veo_job(out_path, VEO_JOBS_GOOGLE)
-                # Google always bakes in Veo's audio; if this beat is meant to be silent,
-                # replace that track with silence now (keeps detail inserts truly silent).
-                if not generate_audio:
-                    _mute_clip(out_path)
-                return secs
-            if status == "timeout":
-                # A GENUINE timeout: still rendering when our deadline hit. Keep the job id
-                # so the next run collects the finished video instead of paying again.
-                print(f"    veo attempt {attempt}: still rendering after {VEO_MAX_WAIT // 60} "
-                      "min; job saved, re-run to collect it without paying again")
-                return 0.0
-            # 'blocked' (safety/likeness filter) or 'failed': this generation produced NO
-            # video, so the saved job is dead — drop it (nothing to collect). The real
-            # reason was already printed by _await_veo_google. Google's likeness filter is
-            # INCONSISTENT (the same face passes on one clip, is blocked on another) and a
-            # blocked generation is not billed, so try again with a fresh generation.
-            _forget_veo_job(out_path, VEO_JOBS_GOOGLE)
-            if attempt < 3:
-                print(f"    veo attempt {attempt} made no video ({status}); retrying ...")
-                time.sleep(3)
-                continue
-            print(f"    veo gave up on this beat after {attempt} attempts ({status}).")
-            return 0.0
-        except Exception as e:
-            msg = _short_err(e)
-            print(f"    veo attempt {attempt} failed: {msg}")
-            if "content filter" in msg or "content_policy" in msg or "blocked" in msg.lower():
-                return 0.0          # same wording will fail again — give up on this beat
-            time.sleep(5)
-    return 0.0
-
-
-def _veo_filter_reason(op) -> str:
-    """The human-readable reason Google's safety/likeness filter blocked a generation, or
-    "" if it was not filtered. Veo signals a block as done=True, NO error and NO video,
-    with the reason tucked into response.rai_media_filtered_reasons — which otherwise
-    reaches us as a mysterious 'could not generate'. Reading it is what makes the failure
-    debuggable (e.g. "we can't create videos with real people's names or likenesses")."""
-    resp = getattr(op, "response", None) or getattr(op, "result", None)
-    if resp is None:
-        return ""
-    reasons = getattr(resp, "rai_media_filtered_reasons", None)
-    if reasons:
-        return "; ".join(str(r) for r in reasons)
-    if getattr(resp, "rai_media_filtered_count", 0):
-        return "content blocked by Veo's safety/likeness filter (no reason text returned)"
-    return ""
-
-
-def _await_veo_google(client, op, out_path: str) -> str:
-    """Poll one Google Veo operation with OUR deadline (a stalled poll can never hang the
-    run), refreshing it until done. Returns a STATUS so the caller can act correctly:
-      'ok'      – the finished video was saved to out_path
-      'blocked' – Google's safety/likeness filter refused it (the real reason is printed)
-      'failed'  – the job errored, or finished with no video for an unknown reason
-      'timeout' – our deadline passed before it finished (it may still be rendering)
-    The old code returned a bare False for the last three, and the caller mislabelled every
-    one as a 'timeout' — hiding the real reason and falsely promising a free re-collect."""
-    deadline = time.time() + VEO_MAX_WAIT
-    while time.time() < deadline:
-        try:
-            op = client.operations.get(op)
-        except Exception:
-            time.sleep(VEO_POLL_EVERY)     # transient — job unaffected, retry
-            continue
-        if op.done:
-            if getattr(op, "error", None):
-                print(f"    veo job failed: {str(op.error)[:160]}")
-                return "failed"
-            reason = _veo_filter_reason(op)
-            if reason:
-                print(f"    veo BLOCKED by Google's safety/likeness filter: {reason}")
-                return "blocked"
-            if _save_veo_video_google(client, op, out_path):
-                return "ok"
-            print("    veo finished but returned no video and no reason (unknown failure)")
-            return "failed"
-        time.sleep(VEO_POLL_EVERY)
-    return "timeout"
-
-
-def _save_veo_video_google(client, op, out_path: str) -> bool:
-    """Download the finished MP4 out of a completed Google Veo operation."""
-    resp = getattr(op, "response", None)
-    vids = getattr(resp, "generated_videos", None) if resp else None
-    if not vids:
-        return False
-    vid = vids[0].video
-    try:
-        client.files.download(file=vid)    # populate the bytes (Gemini API)
-    except Exception:
-        pass                               # bytes may already be inline; fall through
-    data = getattr(vid, "video_bytes", None)
-    if data:
-        with open(out_path, "wb") as f:
-            f.write(data)
-    else:
-        vid.save(out_path)                 # SDK writes the downloaded bytes to disk
-    return os.path.exists(out_path)
-
-
 def _mute_clip(path: str) -> bool:
-    """Replace a clip's audio track with silence, in place. Used only on the Google path
-    for silent beats: the Gemini Developer API always bakes Veo's native audio in, so we
-    swap it for a silent stereo track here. We keep a (silent) track rather than dropping
-    audio entirely so every beat still has a matching stream for the editor's concat."""
+    """Replace a clip's audio track with silence, in place. Used for SILENT beats (the
+    face-free detail inserts): we render them with generate_audio=False, but we still give
+    them a silent stereo track so every beat has a matching audio stream for the editor's
+    concat (a clip with NO audio stream at all breaks the concat). It also strips any stray
+    ambience the model might bake in, so a detail insert is guaranteed truly silent."""
     tmp = path + ".mute.mp4"
     try:
         subprocess.run(["ffmpeg", "-y", "-i", path,
@@ -687,60 +500,73 @@ def _mute_clip(path: str) -> bool:
         return False
 
 
-def _make_veo_clip_fal(image_path: str, prompt: str, duration: str, out_path: str,
-                       generate_audio: bool = True) -> float:
-    """Animate the start image into a clip with Veo 3.1 fast on FAL. For dialogue lines we
-    keep generate_audio=True (Veo's own voice + native lip-sync, which we later
-    re-voice). For SILENT beats (reaction cutaways) we pass generate_audio=False so
-    Veo doesn't invent a voice we'd have to strip. Returns the billed seconds, or
-    0.0 (and writes no file) if Veo could not make it — so one bad beat never
-    crashes the run. Retries transient errors; a content-filter block is permanent
-    for that wording, so we stop retrying it (auto_fix already had its one shot)."""
-    # First: collect anything we already paid for. If a previous run submitted this
-    # clip and died waiting, the job kept running on fal — take that video for free
-    # rather than paying to generate the same thing again.
-    prior = _veo_jobs().get(os.path.basename(out_path))
+def make_video_clip(image_path: str, prompt: str, duration: str, out_path: str,
+                    generate_audio: bool = True) -> float:
+    """Animate the start image into a clip with Seedance 1.5 pro on fal. For SPOKEN beats we
+    keep generate_audio=True (Seedance's own voice + native lip-sync; the narrator is later
+    re-voiced). For SILENT beats (detail inserts) we pass generate_audio=False, which also
+    bills at HALF the rate ($0.026/s vs $0.052/s) — then we lay a silent stereo track so the
+    beat still carries an audio stream for the editor. Returns the billed seconds, or 0.0
+    (writing no file) if it could not be made — so one bad beat never crashes the run.
+
+    Crash-safe: fal bills the moment the job starts and the result only reaches us while we
+    hold the handle, so we save the request_id BEFORE waiting; a run killed mid-wait
+    collects the already-paid clip next time instead of paying twice."""
+    secs = float(int(duration[:-1]))
+
+    # First: collect anything we already paid for. If a previous run submitted this clip
+    # and died waiting, the job kept running on fal — take that video for free rather than
+    # paying to generate the same thing again.
+    prior = _video_jobs().get(os.path.basename(out_path))
     if prior:
         try:
             handle = fal_client.SyncRequestHandle.from_request_id(
-                fal_client.sync_client._client, VEO_MODEL, prior)
-            if isinstance(handle.status(), fal_client.Completed):
-                if _save_veo_video(handle.get(), out_path):
-                    _forget_veo_job(out_path)
-                    print("    (collected the Veo clip a previous run already paid for, $0)")
-                    return float(int(duration[:-1]))
-            elif _await_veo(handle, out_path):     # still running — wait for it
-                _forget_veo_job(out_path)
-                print("    (collected the Veo clip a previous run already paid for, $0)")
-                return float(int(duration[:-1]))
+                fal_client.sync_client._client, VIDEO_MODEL, prior)
+            done = isinstance(handle.status(), fal_client.Completed)
+            if (done and _save_video(handle.get(), out_path)) or \
+               (not done and _await_video(handle, out_path)):
+                _forget_video_job(out_path)
+                if not generate_audio:
+                    _mute_clip(out_path)
+                print("    (collected the clip a previous run already paid for, $0)")
+                return secs
         except Exception as e:
-            print(f"    could not collect the earlier Veo job ({_short_err(e)}); re-submitting")
+            print(f"    could not collect the earlier job ({_short_err(e)}); re-submitting")
 
     image_url = fal_client.upload_file(image_path)
     for attempt in range(1, 4):
         try:
             handle = fal_client.submit(
-                VEO_MODEL,
-                arguments={"prompt": prompt, "image_url": image_url,
-                           "duration": duration, "resolution": VEO_RES,
-                           "generate_audio": generate_audio, "aspect_ratio": "9:16",
-                           "auto_fix": True},   # let Veo soften a borderline prompt itself
+                VIDEO_MODEL,
+                # Seedance takes the duration as a bare number ("5", not "5s") and IGNORES
+                # the image aspect unless aspect_ratio is sent, so we pass it explicitly.
+                # Ordering is deliberate: the cost logger truncates the request body to a
+                # short snippet, so the SHORT params (especially generate_audio, which sets
+                # the billed rate) go BEFORE the long prompt — otherwise reconcile.py can't
+                # read whether audio was on and would misprice the clip.
+                arguments={"generate_audio": generate_audio, "duration": duration[:-1],
+                           "resolution": VIDEO_RES, "aspect_ratio": VIDEO_ASPECT,
+                           "image_url": image_url, "prompt": prompt},
             )
             # Save the id BEFORE waiting: from here on the job is billable, so it must
             # be recoverable even if this process is killed mid-wait.
-            _remember_veo_job(out_path, handle.request_id)
-            print(f"    veo rendering {duration} clip (job {handle.request_id[:8]}, "
-                  f"up to {VEO_MAX_WAIT // 60} min) ...")
-            if _await_veo(handle, out_path):
-                _forget_veo_job(out_path)
-                return float(int(duration[:-1]))
+            _remember_video_job(out_path, handle.request_id)
+            print(f"    seedance rendering {duration} clip (job {handle.request_id[:8]}, "
+                  f"up to {VIDEO_MAX_WAIT // 60} min) ...")
+            if _await_video(handle, out_path):
+                _forget_video_job(out_path)
+                # Silent beats get a guaranteed silent stereo track (also strips any
+                # ambience Seedance baked in) so a detail insert stays truly silent.
+                if not generate_audio:
+                    _mute_clip(out_path)
+                return secs
             # Timed out. Keep the job id — the next run collects it instead of re-paying.
-            print(f"    veo attempt {attempt} timed out after {VEO_MAX_WAIT // 60} min; "
+            print(f"    seedance attempt {attempt} timed out after {VIDEO_MAX_WAIT // 60} min; "
                   "job saved, re-run to collect it without paying again")
             return 0.0
         except Exception as e:
             msg = _short_err(e)
-            print(f"    veo attempt {attempt} failed: {msg}")
+            print(f"    seedance attempt {attempt} failed: {msg}")
             if "content filter" in msg:          # same wording will fail again — give up
                 return 0.0
             time.sleep(5)
@@ -748,10 +574,10 @@ def _make_veo_clip_fal(image_path: str, prompt: str, duration: str, out_path: st
 
 
 def revoice(clip_path: str, voice_id: str, out_path: str) -> float:
-    """Swap the clip's (Veo-invented) voice for OUR ElevenLabs voice with
+    """Swap the clip's (Seedance-invented) voice for OUR ElevenLabs voice with
     Speech-to-Speech, which preserves the original timing so the lip-sync still
     matches. Muxes the new voice back onto the SAME video. Returns the audio
-    seconds (for cost). On any failure, keeps Veo's original voice so a line is
+    seconds (for cost). On any failure, keeps Seedance's original voice so a line is
     never lost."""
     if not voice_id:
         shutil.copyfile(clip_path, out_path)
@@ -767,11 +593,11 @@ def revoice(clip_path: str, voice_id: str, out_path: str) -> float:
                 f"https://api.elevenlabs.io/v1/speech-to-speech/{voice_id}",
                 headers={"xi-api-key": ELEVEN_KEY},
                 data={"model_id": STS_MODEL, "remove_background_noise": "true"},
-                files={"audio": ("veo.mp3", f, "audio/mpeg")},
+                files={"audio": ("clip.mp3", f, "audio/mpeg")},
                 timeout=180,
             )
         if r.status_code != 200:
-            print(f"    revoice failed {r.status_code}: {r.text[:120]}; keeping Veo voice")
+            print(f"    revoice failed {r.status_code}: {r.text[:120]}; keeping Seedance voice")
             shutil.copyfile(clip_path, out_path)
             return 0.0
         with open(swap, "wb") as f:
@@ -783,7 +609,7 @@ def revoice(clip_path: str, voice_id: str, out_path: str) -> float:
                        check=True, capture_output=True)
         return audio_duration(swap)
     except Exception as e:
-        print(f"    revoice error ({e}); keeping Veo voice")
+        print(f"    revoice error ({e}); keeping Seedance voice")
         shutil.copyfile(clip_path, out_path)
         return 0.0
     finally:
@@ -916,8 +742,8 @@ def crop_single(wide_path: str, side: str, out_path: str) -> bool:
     """Cut a SINGLE-person shot out of the composed wide two-shot with pure ffmpeg
     (no AI, so nothing can drift): zoom into the speaker's HALF so only ONE person
     is in frame, keeping the REAL background from the wide. side = 'left'/'right'.
-    This is what guarantees Veo animates the CORRECT person in the CORRECT place —
-    with two faces in a two-shot Veo sometimes lip-syncs the wrong one; here there
+    This is what guarantees Seedance animates the CORRECT person in the CORRECT place —
+    with two faces in a two-shot Seedance sometimes lip-syncs the wrong one; here there
     is only one face to animate. Keeps 9:16 (crops a 1/ZOOM window of the same
     aspect) and biases DOWN to where seated faces sit."""
     Z = 1.6
@@ -944,7 +770,7 @@ def group_shot(names: list, chars_by_name: dict, base_shot: str) -> str:
         # OVER-THE-SHOULDER framing baked into the STILL (not a mid-clip camera move): the
         # SECOND person sits in the foreground with their back/shoulder to the lens, the
         # FIRST faces the camera over that shoulder, in focus. Because the foreground body
-        # is REAL in the composed frame and the video camera then stays locked on it, Veo
+        # is REAL in the composed frame and the video camera then stays locked on it, Seedance
         # never has to invent a shoulder mid-shot — which is what used to clone a person.
         near = descriptor(chars_by_name.get(names[1], {}))   # foreground, back to camera
         far = descriptor(chars_by_name.get(names[0], {}))    # faces camera, in focus
@@ -967,7 +793,7 @@ def group_shot(names: list, chars_by_name: dict, base_shot: str) -> str:
 
 
 def add_silent_audio(video_path: str, out_path: str) -> bool:
-    """Give a video-only clip (a Veo reaction rendered with audio OFF) a silent
+    """Give a video-only clip (a Seedance reaction rendered with audio OFF) a silent
     stereo track, so every beat carries audio for the editor."""
     try:
         subprocess.run(["ffmpeg", "-y", "-i", video_path,
@@ -981,7 +807,7 @@ def add_silent_audio(video_path: str, out_path: str) -> bool:
 
 
 def reaction_prompt(sc: dict, listener_c: dict, cue: str = "") -> str:
-    """Veo prompt for a SILENT reaction beat: the listener reacts with their face
+    """Seedance prompt for a SILENT reaction beat: the listener reacts with their face
     only — no speaking, mouth closed — looking toward the other person off-camera."""
     who = descriptor(listener_c).capitalize()
     react = f" {cue.strip()}." if cue else ""
@@ -996,7 +822,7 @@ def reaction_prompt(sc: dict, listener_c: dict, cue: str = "") -> str:
 # --- Prompts ---------------------------------------------------------------
 
 def single_line_prompt(sc: dict, speaker_c: dict, line: str, emotion: str) -> str:
-    """Veo prompt for a line rendered from a CROPPED SINGLE (only the speaker is in
+    """Seedance prompt for a line rendered from a CROPPED SINGLE (only the speaker is in
     frame). They talk to the other person just OFF-camera to the side — not to the
     lens — so we get one correct mouth moving and no wrong-person lip-sync."""
     who = descriptor(speaker_c).capitalize()
@@ -1011,7 +837,7 @@ def single_line_prompt(sc: dict, speaker_c: dict, line: str, emotion: str) -> st
 
 def line_prompt(sc: dict, speaker_c: dict, listener_descs: list,
                 line: str, emotion: str) -> str:
-    """Veo prompt for ONE dialogue line: the speaker acts + says it; the others
+    """Seedance prompt for ONE dialogue line: the speaker acts + says it; the others
     stay in frame reacting silently; nobody faces the camera."""
     who = descriptor(speaker_c).capitalize()
     tone = f", {emotion.strip()}," if emotion else ""
@@ -1033,47 +859,47 @@ def line_prompt(sc: dict, speaker_c: dict, listener_descs: list,
 
 
 def _reply_cue(c: dict) -> str:
-    """'She replies' / 'He replies'. The word 'replies' signals to Veo that the next
+    """'She replies' / 'He replies'. The word 'replies' signals to Seedance that the next
     line is a consecutive response, not simultaneous speech — which is what keeps the
     two speakers from overlapping into one garbled voice."""
     return "She replies" if character_gender(c) == "female" else "He replies"
 
 
 def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
-    """One prompt for a WHOLE dialogue scene as a single continuous Veo clip, written
+    """One prompt for a WHOLE dialogue scene as a single continuous Seedance clip, written
     as an explicit TIMELINE. Each line gets its own time window, but the CAMERA stays
     ONE locked two-shot for the whole clip — no internal cuts or over-the-shoulder
     reverse angles. That reframe used to duplicate a person into the foreground (the
     same character appeared twice mid-clip); a fixed frame can't, so coverage comes from
     the editor's zoom and the cuts between scenes instead. The per-line windows plus the
-    'replies' hand-off still stop Veo from voicing both lines at once and mumbling a
+    'replies' hand-off still stop Seedance from voicing both lines at once and mumbling a
     garbled bridge between them. Delivery cue and micro-expression ride inside each line
     so the faces perform."""
     lines = sc.get("dialogue", [])
     speakers = sc.get("characters", [])
     # Everyone in the frame, not just the talkers: the silent people are composed into
-    # the start image, so the prompt must account for them or Veo drops or redraws them.
+    # the start image, so the prompt must account for them or Seedance drops or redraws them.
     onscreen = [n for n in (sc.get("onscreen") or speakers)] or speakers
     who = {n: descriptor(chars_by_name.get(n, {})) for n in onscreen}
     wins, total = _line_windows(lines)
-    veo_secs = int(scene_veo_duration(lines)[:-1])
+    clip_secs = int(scene_duration(lines)[:-1])
     # Only ever SHRINK the windows to fit the clip — never stretch them to fill it.
-    # Stretching pads each line with time it has no words for, and Veo fills that gap
+    # Stretching pads each line with time it has no words for, and Seedance fills that gap
     # with invented mumbling; because the padding lands at the end of a line, the
     # garble comes out exactly on the cut to the next speaker (heard as a "monster
     # voice" mid-scene). Any leftover time is pushed to the END of the clip instead,
     # where a held silent reaction is harmless — and is asked for explicitly below.
-    if total > veo_secs and total > 0:
-        scale = veo_secs / total
+    if total > clip_secs and total > 0:
+        scale = clip_secs / total
         wins = [[s * scale, e * scale] for s, e in wins]
-        total = veo_secs
-    # Whatever time is left after the last word is spoken: name it, so Veo plays it as
+        total = clip_secs
+    # Whatever time is left after the last word is spoken: name it, so Seedance plays it as
     # deliberate silence rather than treating it as space that needs filling with sound.
-    tail = max(0.0, veo_secs - total)
+    tail = max(0.0, clip_secs - total)
     # ONE locked framing for the WHOLE clip — deliberately NOT a per-line shot change.
-    # We used to ask Veo for internal CUTS (an over-the-shoulder REVERSE angle on each
+    # We used to ask Seedance for internal CUTS (an over-the-shoulder REVERSE angle on each
     # reply) to fake real coverage, but that is exactly what CLONES a person: to build an
-    # over-the-shoulder Veo needs a body's shoulder in the foreground, and since both
+    # over-the-shoulder Seedance needs a body's shoulder in the foreground, and since both
     # people are already seated in frame it DUPLICATES one of them to supply it (the same
     # woman appeared twice mid-clip). A single, stable two-shot never needs a foreground
     # body, so it cannot clone. The sense of coverage now comes from the editor's slow zoom
@@ -1097,7 +923,7 @@ def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
     # outfit. Silent people need this as much as speakers — they're on camera too.
     cast = " ".join(f"{who.get(n, 'a person').capitalize()} = "
                     f"{identity_lock(chars_by_name.get(n, {}))}." for n in onscreen)
-    # Name the people who never speak, so Veo keeps them present and reacting instead
+    # Name the people who never speak, so Seedance keeps them present and reacting instead
     # of treating them as scenery to drift, mute-swap, or quietly drop out of frame.
     silent = [who[n] for n in onscreen if n not in speakers]
     silent_line = ""
@@ -1113,7 +939,7 @@ def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
     # a directed beat ("hold, nobody speaks") instead of unexplained empty runtime.
     tail_line = ""
     if tail >= 0.4:
-        tail_line = (f"\n{total:.1f}-{veo_secs:.1f}s: Hold on the faces in silence — "
+        tail_line = (f"\n{total:.1f}-{clip_secs:.1f}s: Hold on the faces in silence — "
                      "nobody speaks, no words at all, just the reaction settling.")
     # "Facing each other" only makes sense for a pair; a group turns toward whoever
     # holds the floor. Either way, nobody looks down the lens (that's the narrator's job).
@@ -1125,13 +951,13 @@ def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
         staging = (f"{len(onscreen)} people in one conversation, turned toward whoever "
                    "is speaking, never the camera")
     return (
-        # Lead with motion so Veo doesn't open on a frozen staring frame.
-        f"{veo_secs} seconds / ONE continuous LOCKED shot, no cuts / intimate cinematic "
+        # Lead with motion so Seedance doesn't open on a frozen staring frame.
+        f"{clip_secs} seconds / ONE continuous LOCKED shot, no cuts / intimate cinematic "
         f"legal drama / no music.\n"
         f"A continuous cinematic scene, already in motion from the first frame — "
         f"{staging}. "
         # ONE fixed camera for the whole clip. The over-the-shoulder/reverse reframe is
-        # banned here because building it makes Veo duplicate a person into the foreground.
+        # banned here because building it makes Seedance duplicate a person into the foreground.
         f"CAMERA: {hold_shot}, held as ONE fixed angle for the entire clip with at most a "
         f"very slight, slow push-in. The camera does NOT cut, swing, orbit, or change to a "
         f"different angle — it holds this single framing the whole time. The foreground "
@@ -1143,7 +969,7 @@ def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
         "\nNobody speaks except in their own window above — no extra words, no muttering, "
         "no invented dialogue between the lines. Only the person whose line it is moves "
         f"their mouth; the others listen and react.{silent_line}{action_line} "
-        # Veo likes to invent big moves, and it stages them from nothing: a seated
+        # Seedance likes to invent big moves, and it stages them from nothing: a seated
         # person "stands" out of a chair that was never rendered, or furniture pops in
         # and out. Pin the blocking to what the start frame actually shows.
         "Everyone keeps the position the opening frame puts them in — whoever is seated "
@@ -1151,7 +977,7 @@ def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
         "walks off, and no furniture or object appears, vanishes or changes place. "
         "Nuanced facial micro-expressions, real weighty movement and object physics, "
         "every person's face and clothing colour identical throughout, movie-level subtlety. "
-        # Veo tends to briefly CLONE a person mid-clip when the camera reframes (a second
+        # Seedance tends to briefly CLONE a person mid-clip when the camera reframes (a second
         # copy of the same person flickers in during the angle change, then resolves). Name
         # it so the model holds one stable body per person through the move.
         "Exactly one of each person on screen at all times — as the camera moves or changes "
@@ -1161,7 +987,7 @@ def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
 
 
 def narration_prompt(sc: dict, lead_c: dict) -> str:
-    """Veo prompt for a memoir narration beat: the lone protagonist performs it
+    """Seedance prompt for a memoir narration beat: the lone protagonist performs it
     straight to camera, first person."""
     who = descriptor(lead_c).capitalize() if lead_c else "The narrator"
     # Same identity lock as the dialogue scenes, so the narrator is unmistakably the
@@ -1195,8 +1021,8 @@ def main():
     named = [c for c in data.get("characters", []) if not c.get("anonymous")]
     main_names = [c["fictional_name"] for c in named[:2] if c.get("file")]
 
-    veo_seconds = 0.0       # Veo video seconds (billed $0.15/s w/ audio)
-    detail_veo_seconds = 0.0  # Veo seconds for silent detail inserts (billed $0.10/s, no audio)
+    video_seconds = 0.0     # Seedance video seconds WITH audio (spoken scenes, $0.052/s)
+    detail_video_seconds = 0.0  # Seedance seconds for silent detail inserts ($0.026/s, no audio)
     sts_seconds = 0.0       # ElevenLabs Speech-to-Speech seconds
     ambient_seconds = 0.0   # ElevenLabs Sound-Effects seconds (ambient beds + music)
     scene_images = 0        # composed images we paid for (scene composites + details)
@@ -1272,7 +1098,7 @@ def main():
             sc["ambient"] = amb_file
 
         # Compose the scene image(s). We do NOT reuse a previous clip's last frame —
-        # that frame is mid-talk, which makes Veo continue the wrong speaker. If the
+        # that frame is mid-talk, which makes Seedance continue the wrong speaker. If the
         # SAME people were already composed in the SAME place, reuse (no re-pay), and
         # location_ref keeps the room identical even when the cast changes.
         cache_key = (frozenset(names), loc_key)
@@ -1331,10 +1157,10 @@ def main():
             print(f"  [{i}] skipped: no scene image could be composed.")
             continue
 
-        # --- NARRATION: one Veo clip, protagonist to camera, then re-voice ---
+        # --- NARRATION: one Seedance clip, protagonist to camera, then re-voice ---
         if sc.get("type") == "narration":
             # Resume guard: if a previous run already rendered + re-voiced this
-            # narration clip, reuse it for free instead of re-paying Veo.
+            # narration clip, reuse it for free instead of re-paying Seedance.
             if os.path.exists(clip_path):
                 sc["beats"] = [{"file": clip_name, "kind": "narration",
                                 "speaker": names[0], "silent": False}]
@@ -1344,13 +1170,13 @@ def main():
             lead_c = chars_by_name.get(names[0], {})
             raw = os.path.join(OUT_DIR, f"_raw_{i:02d}.mp4")
             # DRAFT: shortest length + no audio, to preview the shot cheaply.
-            dur = "4s" if DRAFT else veo_duration(sc.get("narration", ""))
-            secs = make_veo_clip(start_img, narration_prompt(sc, lead_c), dur, raw,
+            dur = "5s" if DRAFT else clip_duration(sc.get("narration", ""))
+            secs = make_video_clip(start_img, narration_prompt(sc, lead_c), dur, raw,
                                  generate_audio=not DRAFT)
             if secs == 0.0 or not os.path.exists(raw):
-                print(f"  [{i}] NARRATION skipped: Veo could not generate this beat.")
+                print(f"  [{i}] NARRATION skipped: Seedance could not generate this beat.")
                 continue
-            veo_seconds += secs
+            video_seconds += secs
             sts_seconds += revoice(raw, lead_c.get("voice_id", ""), clip_path)
             if os.path.exists(raw):
                 os.remove(raw)
@@ -1358,14 +1184,14 @@ def main():
             # lip-synced speech, so the editor keeps its audio locked to its video).
             sc["beats"] = [{"file": clip_name, "kind": "narration",
                             "speaker": names[0], "silent": False}]
-            print(f"  [{i}] NARRATION [{names[0]}] -> {clip_name} (Veo {secs:.0f}s, re-voiced)")
+            print(f"  [{i}] NARRATION [{names[0]}] -> {clip_name} (Seedance {secs:.0f}s, re-voiced)")
             continue
 
-        # --- DIALOGUE: render the WHOLE scene as ONE continuous Veo clip ---
+        # --- DIALOGUE: render the WHOLE scene as ONE continuous Seedance clip ---
         # Both people act and talk in a single generation, so the hand-off from one
-        # line to the next happens inside the clip with Veo's native lip-sync — no
+        # line to the next happens inside the clip with Seedance's native lip-sync — no
         # glue seam between separate clips, which is what made past conversations feel
-        # chopped. The two speakers therefore share ONE clip; Veo also invents their
+        # chopped. The two speakers therefore share ONE clip; Seedance also invents their
         # voices here. We keep those native voices for dialogue because pulling two
         # speakers back apart to swap in our cloned voices would need per-speaker
         # diarisation (a later upgrade). The recurring NARRATOR is still re-voiced
@@ -1386,7 +1212,7 @@ def main():
             ins, imgs, dsecs = make_detail_insert(
                 i, sc.get("detail", ""), sc_setting, room_ref or start_img)
             scene_images += imgs
-            detail_veo_seconds += dsecs
+            detail_video_seconds += dsecs
             if ins:
                 detail_by_loc[loc_key] = ins
                 insert_beats = [ins]
@@ -1402,33 +1228,33 @@ def main():
             continue
 
         # DRAFT: shortest length + no audio, to preview framing/identity cheaply.
-        dur = "4s" if DRAFT else scene_veo_duration(sc.get("dialogue", []))
-        secs = make_veo_clip(start_img, build_scene_prompt(sc, chars_by_name),
+        dur = "5s" if DRAFT else scene_duration(sc.get("dialogue", []))
+        secs = make_video_clip(start_img, build_scene_prompt(sc, chars_by_name),
                              dur, clip_path, generate_audio=not DRAFT)
         if secs == 0.0 or not os.path.exists(clip_path):
-            print(f"  [{i}] DIALOGUE skipped: Veo could not generate it.")
+            print(f"  [{i}] DIALOGUE skipped: Seedance could not generate it.")
             continue
-        veo_seconds += secs
+        video_seconds += secs
         # Beats = optional detail insert, then the whole scene. The dialogue clip carries
         # real lip-synced speech, so the editor keeps its audio locked to its own video.
         sc["beats"] = insert_beats + [dialogue_beat]
         print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {clip_name} "
-              f"(one continuous clip, Veo {secs:.0f}s, native voices)"
+              f"(one continuous clip, Seedance {secs:.0f}s, native voices)"
               f"{' + detail' if insert_beats else ''}")
 
-    # --- Cost: dialogue/narration Veo + silent detail Veo + voice swap + sound + images ---
-    # Rates depend on the backend that actually rendered the clips (Google is cheaper and
-    # bundles audio; fal is dearer but discounts silent clips) — see costs.veo_rates.
-    veo_rate, detail_rate = costs.veo_rates(VEO_PROVIDER)
-    veo_cost = veo_seconds * veo_rate
-    detail_veo_cost = detail_veo_seconds * detail_rate
+    # --- Cost: spoken Seedance + silent detail Seedance + voice swap + sound + images ---
+    # Seedance bills per second: WITH audio for the spoken scenes, and at HALF that rate
+    # for the silent (generate_audio=False) detail inserts — see costs.seedance_rates.
+    video_rate, detail_rate = costs.seedance_rates()
+    video_cost = video_seconds * video_rate
+    detail_video_cost = detail_video_seconds * detail_rate
     sts_cost = sts_seconds * costs.ELEVEN_STS_PER_SEC
     sfx_cost = ambient_seconds * costs.ELEVEN_SFX_PER_SEC                   # ambient beds + music
     image_cost = scene_images * costs.NANO_BANANA_PRO_EDIT_PER_IMAGE
-    clip_cost = veo_cost + detail_veo_cost + sts_cost + sfx_cost + image_cost
+    clip_cost = video_cost + detail_video_cost + sts_cost + sfx_cost + image_cost
     costs.record(data, "clips",
-                 f"Scenes - Veo 3.1 fast ({veo_seconds:.0f}s) + detail inserts "
-                 f"({detail_veo_seconds:.0f}s silent) + voice swap ({sts_seconds:.0f}s) + "
+                 f"Scenes - Seedance 1.5 pro ({video_seconds:.0f}s) + detail inserts "
+                 f"({detail_video_seconds:.0f}s silent) + voice swap ({sts_seconds:.0f}s) + "
                  f"{scene_images} images + {ambient_seconds:.0f}s sound",
                  clip_cost)
 
@@ -1438,7 +1264,7 @@ def main():
     n_inserts = sum(1 for v in detail_by_loc.values() if v)
     print(f"\nUpdated output/analysis.json with the scene beats. "
           f"({scene_images} images, {len(ambient_by_loc)} ambient beds, {n_inserts} detail inserts)")
-    costs.show(f"{len(scenes)} scenes (Veo {veo_seconds:.0f}s + {detail_veo_seconds:.0f}s detail "
+    costs.show(f"{len(scenes)} scenes (Seedance {video_seconds:.0f}s + {detail_video_seconds:.0f}s detail "
                f"+ voice swap {sts_seconds:.0f}s + {scene_images} images + sound)", clip_cost)
 
 

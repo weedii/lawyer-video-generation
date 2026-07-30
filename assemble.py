@@ -5,8 +5,8 @@ research was blunt: what makes AI drama look pro is NOT the clips, it's the
 connective tissue BETWEEN them. So this step does real editing craft:
 
   1. Per BEAT (one clip = one beat, e.g. one spoken line): trim the dead
-     "staring" lead-in Veo puts on every clip (adaptive speech-onset), so there
-     are no dead pauses before someone talks.
+     "staring" lead-in image-to-video clips tend to open with (adaptive
+     speech-onset), so there are no dead pauses before someone talks.
   2. Give every clip ONE colour look (a gentle shared grade, + an optional LUT)
      so clips generated independently stop looking like different cameras.
   3. Lay a CONTINUOUS ambient bed (room tone) per location + optional music UNDER
@@ -58,7 +58,7 @@ EDGE_FADE = 0.04     # tiny audio fade at each cut, to kill the pop/click
 # narrator's bridge line, and the detail shot — orientation, not punctuation.
 TRANS_FADE = 0.25    # length of the dip-to-black, on a genuine time jump only (~6 frames)
 CRF = 16             # x264 quality: 16 is visually near-lossless (lower = better)
-FPS = 25             # match the talking-model output (Veo/Kling are 25fps)
+FPS = 24             # match the scene-model output (Seedance renders at 24fps)
 ZOOM_AMOUNT = 0.06   # gentle 6% zoom over a clip; alternates in/out per clip
 SUPER_SCALE = 2      # render the zoom on a 2x frame so it stays smooth + sharp
 
@@ -91,7 +91,7 @@ DUCK_ATTACK = 5      # ms to duck once a voice starts (fast, so no word is maske
 DUCK_RELEASE = 400   # ms to swell back after the voice stops (slow, so it breathes)
 
 # Silent beats (reaction cutaways, establishing shots) are held only briefly — a
-# reaction is a glance, not a scene. Veo's shortest clip is 4s, so we cap silent
+# reaction is a glance, not a scene. Seedance's shortest clip is 5s, so we cap silent
 # beats here so a cutaway doesn't overstay and stall the pace.
 SILENT_MAX = 2.2     # max seconds to hold a silent (reaction/establishing) beat
 INSERT_MAX = 2.8     # the detail insert opens a new place AND carries its location card,
@@ -110,9 +110,9 @@ CARD_TIME_WORDS = ("dawn", "morning", "midday", "noon", "afternoon", "dusk",
                    "evening", "night", "midnight", "late")
 
 # --- Dead lead-in trim ------------------------------------------------------
-# Veo starts every clip with the character just LOOKING at the camera for 1-6s
-# (silent, or only breathing / a shoe scuff) before actually speaking. We cut
-# that off by finding where real SPEECH starts.
+# Image-to-video clips tend to open with the character just LOOKING at the camera
+# for 1-6s (silent, or only breathing / a shoe scuff) before actually speaking. We
+# cut that off by finding where real SPEECH starts.
 #
 # We can't use plain loudness: a loud breath or shoe scuff is as loud as quiet
 # speech. The reliable tell is that SPEECH lives in the voice band (300-3400Hz)
@@ -693,7 +693,7 @@ if __name__ == "__main__":
 # # --- extra constants ---
 # TRIM_TAIL_PAD = 0.35     # keep this much AFTER the last word (never clip it)
 # TRIM_TAIL_MIN = 0.30     # only bother tail-trimming if it removes at least this much
-# DEAD_GAP_MAX = 0.45      # a silence longer than this is a Veo reset -> cut it out
+# DEAD_GAP_MAX = 0.45      # a silence longer than this is a model reset -> cut it out
 # DEAD_KEEP_PAD = 0.18     # keep this much speech-silence around each kept region
 # DEAD_MIN_REGION = 0.35   # ignore speech blips shorter than this (a breath/scuff)
 # DEAD_MIN_CUT = 0.40      # only re-encode a clip if we'd remove at least this much
@@ -712,7 +712,7 @@ if __name__ == "__main__":
 #         return audio_duration(path)
 #
 # def speech_end(path: str, total: float) -> float:
-#     """Time (s) where real speech ENDS, so we can cut Veo's silent tail-reset.
+#     """Time (s) where real speech ENDS, so we can cut the model's silent tail-reset.
 #     Mirror of speech_onset from the other end: find the LAST sustained voice-band
 #     window, walk forward to catch a short final word after a brief pause, then keep
 #     TRIM_TAIL_PAD so the last word is never clipped. Returns `total` (no tail trim)

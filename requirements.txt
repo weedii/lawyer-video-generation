@@ -1,5 +1,4 @@
 fal-client
-google-genai
 openai
 python-dotenv
 requests

@@ -1,6 +1,6 @@
 """STAGE 2 - STEP 1: Write the SCENE script for the microdrama (scene-based).
 
-The unit is a SCENE, not a single line. Each scene is one continuous Veo shot
+The unit is a SCENE, not a single line. Each scene is one continuous Seedance shot
 where the characters ACT and talk TO EACH OTHER — like a real short film —
 instead of one avatar talking to camera per line.
 
@@ -60,7 +60,7 @@ def lead_name(data: dict) -> str:
 # How many people a dialogue scene may hold. These are NOT model limits — the old
 # 2-speaker cap came from Kling, which only accepted two voices per shot, and we no
 # longer use Kling. What actually binds now:
-#   SPEAKERS: the whole scene is ONE ~8s Veo clip, and each line needs its own time
+#   SPEAKERS: the whole scene is ONE ~8s Seedance clip, and each line needs its own time
 #   window to stay lip-synced and un-garbled, so only ~3 short lines fit.
 #   ONSCREEN: every visible person must be composed from their own locked portrait,
 #   and the more faces we pack into one vertical frame, the smaller and less stable
@@ -297,8 +297,8 @@ def clean_scenes(script: dict, valid_names: list = None, lead: str = None) -> di
 
     valid_names: the real cast names. If given, any dialogue line whose speaker is
     NOT a real cast member is DROPPED — because a made-up speaker has no voice and
-    no face, so Kling would speak their lines in another character's voice (the bug
-    where the man said everyone's lines). This is the safety net; the real fix is
+    no face, so the model would speak their lines in another character's voice (the
+    bug where the man said everyone's lines). This is the safety net; the real fix is
     making the model use the exact cast names in the first place."""
     valid = {n.strip().lower() for n in valid_names} if valid_names else None
     cleaned = []

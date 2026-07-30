@@ -7,7 +7,7 @@ You give it a story link. It runs the other scripts in order:
     4. gen_characters.py  -> make one locked portrait per USED character (only the
                              characters the script actually uses, to skip wasted renders)
     5. voice_maker.py     -> clone each character's voice + narrator voiceover
-    6. scene_clips.py     -> render one cinematic SCENE clip per beat (Kling)
+    6. scene_clips.py     -> render one cinematic SCENE clip per beat (Seedance)
     7. assemble.py        -> join the scenes into the final video
 The result is output/final_video.mp4.
 

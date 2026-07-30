@@ -34,7 +34,7 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 | 3 | `gen_characters.py` | One locked vertical portrait per character (used as scene reference) | fal.ai Nano Banana Pro (2K) | $0.15 each |
 | 4 | `scene_writer.py` | Write the SCENE script (5–7 scenes; each dialogue scene = 2 characters in one room) | OpenAI GPT-4.1 | ~$0.04 |
 | 5 | `voice_maker.py` | Assign each character a fixed ElevenLabs voice_id (free; the swap is billed in step 6) | ElevenLabs voice IDs | free |
-| 6 | `scene_clips.py` | Compose the characters into one shot, render one Veo clip per line (two people acting + talking, native lip-sync), then swap each into our own voice keeping the timing | Nano Banana Pro + Veo 3.1 fast + ElevenLabs Speech-to-Speech | ~$0.15/sec Veo |
+| 6 | `scene_clips.py` | Compose the characters into one shot, render one Seedance clip per scene (two people acting + talking, native lip-sync), then swap the narrator into our own voice keeping the timing | Nano Banana Pro + Seedance 1.5 pro + ElevenLabs Speech-to-Speech | ~$0.052/sec Seedance |
 | 7 | `assemble.py` | Join the scenes into the final video | ffmpeg (local) | free |
 
 ### Results (in `output/`)
@@ -92,12 +92,13 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 - **Character consistency across scenes:** keep one locked portrait per character
   (Nano Banana Pro), then feed those portraits as **references** when composing
   each scene image, so faces stay the same.
-- **Voice consistency across scenes:** clone each character's ElevenLabs voice
-  into a **Kling voice_id** once (create-voice), then reuse that id in every
-  scene. Same voice every time, and they're our brand voices — a plain scene
-  model would invent a new voice each clip.
-- A dialogue scene may have **at most 2 speaking characters** (Kling's 2-voice
-  limit); the scene writer enforces this.
+- **Voice consistency across scenes:** each character owns one fixed ElevenLabs
+  voice. Seedance invents a new voice per clip, so the recurring narrator's clip
+  audio is swapped into their locked voice with **Speech-to-Speech** (which keeps
+  the timing, so the lip-sync still matches). Dialogue clips keep Seedance's own
+  native voices (splitting two speakers to swap both is a later upgrade).
+- A dialogue scene may have **at most 2 speaking characters** (the whole scene is
+  one ~8s clip and each line needs its own time window); the scene writer enforces this.
 - **ElevenLabs v3 clips the final word** — fix: append a trailing `—` so the cut
   lands on the dash, then trim the leftover silence (`voice_maker.py`).
 - Nano Banana can compose a wide room **sideways** to fit 9:16 — compose the room
@@ -108,10 +109,10 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 - Scrape: free
 - Analyze + scene script (OpenAI GPT-4.1): ~$0.07 per story
 - Character portrait (Nano Banana Pro, 2K): $0.15 each
-- Voice: each character keeps one fixed ElevenLabs voice; Veo's audio is swapped into it with Speech-to-Speech (~$0.002/sec of audio)
+- Voice: each character keeps one fixed ElevenLabs voice; the narrator's clip audio is swapped into it with Speech-to-Speech (~$0.002/sec of audio)
 - Composed scene image (Nano Banana Pro): $0.15 per scene
-- Scene clip — Veo 3.1 fast (two people acting + talking, native lip-sync): $0.15 per second, then swapped into our voice (~$0.002/sec)
-- **Roughly $12–15 for one finished ~75s video** (real multi-actor cinema costs more)
+- Scene clip — Seedance 1.5 pro (two people acting + talking, native lip-sync): $0.052 per second with audio ($0.026 for silent detail inserts); the narrator clip is then swapped into our voice (~$0.002/sec)
+- **Roughly $3–5 for one finished ~75s video** (Seedance replaced the far dearer Veo, which also blocked our AI faces)
 
 ---
 

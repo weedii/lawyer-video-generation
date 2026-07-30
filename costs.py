@@ -18,7 +18,7 @@ Sources (fal.ai official model pages + docs, checked 2026-06):
     fal.ai/models/fal-ai/kling-video/ai-avatar/v2/standard
 - OmniHuman 1.5:    $0.16 / second of output video
     fal.ai/models/fal-ai/bytedance/omnihuman/v1.5
-- Seedance 1.5 Pro (narration motion): $0.052/sec with audio, $0.026/sec without
+- Seedance 1.5 Pro (SCENE model): $0.052/sec with audio, $0.026/sec without
     fal.ai/models/fal-ai/bytedance/seedance/v1.5/pro/image-to-video
 - ElevenLabs and OpenAI bill on SEPARATE accounts (NOT fal).
 """
@@ -72,15 +72,24 @@ OMNIHUMAN_PER_SEC = 0.16
 VEED_FABRIC_480P_PER_SEC = 0.08
 VEED_FABRIC_720P_PER_SEC = 0.15
 
-# --- Scene-motion model (fal) ---------------------------------------------
-# Seedance 1.5 Pro image-to-video: real body motion (two people, stand up, walk)
-# from a still image. We use it for the NARRATION beats so they MOVE instead of
-# being a frozen photo. We turn its native audio OFF (we lay the narrator voice
-# over it ourselves), which HALVES the price.
-#   720p WITH audio  = $0.052/sec
-#   720p WITHOUT audio = $0.026/sec  <- what we use
+# --- Scene model (fal) — the pipeline's main cost -------------------------
+# Seedance 1.5 Pro image-to-video is now THE scene model: two people act + talk in
+# ONE shot with native lip-sync. It replaced Veo 3.1 — Veo's likeness filter refused
+# our AI-invented faces on ~half of clips (a Google policy that also cost more).
+# Seedance holds the same faces, is NOT blocked, and is cheaper. It bills per second,
+# and turning native audio OFF HALVES the price:
+#   720p WITH audio    = $0.052/sec  <- spoken scenes (dialogue + narration)
+#   720p WITHOUT audio = $0.026/sec  <- silent detail inserts
 #     fal.ai/models/fal-ai/bytedance/seedance/v1.5/pro/image-to-video
-SEEDANCE_PRO_PER_SEC = 0.026
+SEEDANCE_PRO_AUDIO_PER_SEC = 0.052
+SEEDANCE_PRO_NOAUDIO_PER_SEC = 0.026
+
+
+def seedance_rates():
+    """(spoken $/s, silent $/s) for Seedance 1.5 pro, so the printed cost stays honest:
+    spoken scenes render WITH audio; the face-free detail inserts render WITHOUT it,
+    which bills at half the rate."""
+    return SEEDANCE_PRO_AUDIO_PER_SEC, SEEDANCE_PRO_NOAUDIO_PER_SEC
 
 # --- Scene model (Kling v3) — the scene pipeline's main cost ----------------
 # Kling v3 standard image-to-video: animates a composed two-character image into
@@ -108,38 +117,11 @@ KLING_CREATE_VOICE_PER = 0.007
 #     fal.ai/models/fal-ai/sync-lipsync
 SYNC_LIPSYNC_PER_SEC = 0.0117
 
-# Veo 3.1 FAST image-to-video (our scene model): two people acting + talking in
-# ONE shot with native lip-sync. 720p/1080p WITH audio = $0.15/s (no audio $0.10).
-# Veo bills per whole 4s/6s/8s block, so a short line still costs its block.
-#     fal.ai/models/fal-ai/veo3.1/fast/image-to-video
-VEO_FAST_AUDIO_PER_SEC = 0.15
-VEO_FAST_NOAUDIO_PER_SEC = 0.10   # silent clips (detail inserts): the cheaper no-audio rate
+# (Veo 3.1 fast — via fal and via Google's Gemini API — was the previous scene model.
+# It was dropped for Seedance 1.5 pro above: Veo's likeness filter blocked our AI faces
+# on ~half of clips and it cost more. Its rate constants + veo_rates() were removed.)
 
-# Veo 3.1 fast via GOOGLE's Gemini API (google-genai library) instead of fal — our
-# DEFAULT scene provider now. It is the SAME Veo model with the same native lip-sync,
-# but Google prices it lower, so this is a ~33% cut on our single biggest line item:
-#   720p  (audio bundled) = $0.10/s   <- what we use (fal charged $0.15/s for audio)
-#   1080p (audio bundled) = $0.12/s   AND Google forces every 1080p clip to a full 8s
-#                                     block, so a short 4s line would pay for 8s. That
-#                                     wipes out the saving, so we stay at 720p and let
-#                                     the editor upscale to 1080x1920.
-# On Google, audio is ALWAYS bundled — there is no cheaper no-audio rate — so a silent
-# detail insert costs the same $0.10/s as a spoken clip (still <= fal's no-audio rate).
-#     ai.google.dev/gemini-api/docs/pricing
-VEO_GOOGLE_FAST_720P_PER_SEC = 0.10
-VEO_GOOGLE_FAST_1080P_PER_SEC = 0.12
-
-
-def veo_rates(provider: str):
-    """(spoken $/s, silent $/s) for the Veo provider actually in use, so the printed
-    cost stays honest whichever backend rendered the clips. Google bundles audio and has
-    NO separate no-audio discount, so both rates are the flat 720p price; fal discounts
-    silent clips, so its no-audio rate is lower."""
-    if provider == "google":
-        return VEO_GOOGLE_FAST_720P_PER_SEC, VEO_GOOGLE_FAST_720P_PER_SEC
-    return VEO_FAST_AUDIO_PER_SEC, VEO_FAST_NOAUDIO_PER_SEC
-
-# ElevenLabs Speech-to-Speech (voice changer): swaps Veo's invented voice for OUR
+# ElevenLabs Speech-to-Speech (voice changer): swaps the model's invented voice for OUR
 # locked character voice while KEEPING the timing, so the lip-sync still matches.
 # $0.12 / minute of audio = $0.002 / second.
 #     elevenlabs.io/docs/api-reference/speech-to-speech
