@@ -517,10 +517,20 @@ def _make_veo_clip_google(image_path: str, prompt: str, duration: str, out_path:
     if prior:
         try:
             op = client.operations.get(types.GenerateVideosOperation(name=prior))
-            if _await_veo_google(client, op, out_path):
+            status = _await_veo_google(client, op, out_path)
+            if status == "ok":
                 _forget_veo_job(out_path, VEO_JOBS_GOOGLE)
+                if not generate_audio:
+                    _mute_clip(out_path)
                 print("    (collected the Veo clip a previous run already paid for, $0)")
                 return secs
+            if status == "timeout":
+                print("    (the earlier Veo job is still rendering; re-run later to collect it)")
+                return 0.0
+            # blocked/failed: the earlier job produced NO video, so it is dead — drop it
+            # (there is nothing to collect) and generate a fresh one below.
+            _forget_veo_job(out_path, VEO_JOBS_GOOGLE)
+            print("    (the earlier Veo job produced no video; regenerating)")
         except Exception as e:
             print(f"    could not collect the earlier Veo job ({_short_err(e)}); re-submitting")
 
@@ -553,16 +563,31 @@ def _make_veo_clip_google(image_path: str, prompt: str, duration: str, out_path:
             _remember_veo_job(out_path, op.name, VEO_JOBS_GOOGLE)
             print(f"    veo rendering {duration} clip (job {op.name.split('/')[-1][:8]}, "
                   f"up to {VEO_MAX_WAIT // 60} min) ...")
-            if _await_veo_google(client, op, out_path):
+            status = _await_veo_google(client, op, out_path)
+            if status == "ok":
                 _forget_veo_job(out_path, VEO_JOBS_GOOGLE)
                 # Google always bakes in Veo's audio; if this beat is meant to be silent,
                 # replace that track with silence now (keeps detail inserts truly silent).
                 if not generate_audio:
                     _mute_clip(out_path)
                 return secs
-            # Timed out. Keep the job id — the next run collects it instead of re-paying.
-            print(f"    veo attempt {attempt} timed out after {VEO_MAX_WAIT // 60} min; "
-                  "job saved, re-run to collect it without paying again")
+            if status == "timeout":
+                # A GENUINE timeout: still rendering when our deadline hit. Keep the job id
+                # so the next run collects the finished video instead of paying again.
+                print(f"    veo attempt {attempt}: still rendering after {VEO_MAX_WAIT // 60} "
+                      "min; job saved, re-run to collect it without paying again")
+                return 0.0
+            # 'blocked' (safety/likeness filter) or 'failed': this generation produced NO
+            # video, so the saved job is dead — drop it (nothing to collect). The real
+            # reason was already printed by _await_veo_google. Google's likeness filter is
+            # INCONSISTENT (the same face passes on one clip, is blocked on another) and a
+            # blocked generation is not billed, so try again with a fresh generation.
+            _forget_veo_job(out_path, VEO_JOBS_GOOGLE)
+            if attempt < 3:
+                print(f"    veo attempt {attempt} made no video ({status}); retrying ...")
+                time.sleep(3)
+                continue
+            print(f"    veo gave up on this beat after {attempt} attempts ({status}).")
             return 0.0
         except Exception as e:
             msg = _short_err(e)
@@ -573,11 +598,32 @@ def _make_veo_clip_google(image_path: str, prompt: str, duration: str, out_path:
     return 0.0
 
 
-def _await_veo_google(client, op, out_path: str) -> bool:
+def _veo_filter_reason(op) -> str:
+    """The human-readable reason Google's safety/likeness filter blocked a generation, or
+    "" if it was not filtered. Veo signals a block as done=True, NO error and NO video,
+    with the reason tucked into response.rai_media_filtered_reasons — which otherwise
+    reaches us as a mysterious 'could not generate'. Reading it is what makes the failure
+    debuggable (e.g. "we can't create videos with real people's names or likenesses")."""
+    resp = getattr(op, "response", None) or getattr(op, "result", None)
+    if resp is None:
+        return ""
+    reasons = getattr(resp, "rai_media_filtered_reasons", None)
+    if reasons:
+        return "; ".join(str(r) for r in reasons)
+    if getattr(resp, "rai_media_filtered_count", 0):
+        return "content blocked by Veo's safety/likeness filter (no reason text returned)"
+    return ""
+
+
+def _await_veo_google(client, op, out_path: str) -> str:
     """Poll one Google Veo operation with OUR deadline (a stalled poll can never hang the
-    run), refreshing the long-running operation until it is done. A transient poll failure
-    is ignored and retried — the job keeps running regardless. Returns True once the video
-    is on disk."""
+    run), refreshing it until done. Returns a STATUS so the caller can act correctly:
+      'ok'      – the finished video was saved to out_path
+      'blocked' – Google's safety/likeness filter refused it (the real reason is printed)
+      'failed'  – the job errored, or finished with no video for an unknown reason
+      'timeout' – our deadline passed before it finished (it may still be rendering)
+    The old code returned a bare False for the last three, and the caller mislabelled every
+    one as a 'timeout' — hiding the real reason and falsely promising a free re-collect."""
     deadline = time.time() + VEO_MAX_WAIT
     while time.time() < deadline:
         try:
@@ -587,11 +633,18 @@ def _await_veo_google(client, op, out_path: str) -> bool:
             continue
         if op.done:
             if getattr(op, "error", None):
-                print(f"    veo job failed: {str(op.error)[:140]}")
-                return False
-            return _save_veo_video_google(client, op, out_path)
+                print(f"    veo job failed: {str(op.error)[:160]}")
+                return "failed"
+            reason = _veo_filter_reason(op)
+            if reason:
+                print(f"    veo BLOCKED by Google's safety/likeness filter: {reason}")
+                return "blocked"
+            if _save_veo_video_google(client, op, out_path):
+                return "ok"
+            print("    veo finished but returned no video and no reason (unknown failure)")
+            return "failed"
         time.sleep(VEO_POLL_EVERY)
-    return False
+    return "timeout"
 
 
 def _save_veo_video_google(client, op, out_path: str) -> bool:
