@@ -204,6 +204,13 @@ HARD RULES:
   no rewinding", no "I was never the same". Those read as cheesy. Instead land a hard,
   concrete, slightly cynical line — a fact, a specific regret, or a jab — and stop.
   Aim for a sharp true-crime / prestige-drama voice, never a greeting card.
+- PLAIN, SIMPLE ENGLISH (important — it's watched while scrolling). Write so ANYONE
+  understands it INSTANTLY on first listen. Use short, everyday words and short
+  sentences — one idea per sentence. NO literary or fancy phrasing, no big vocabulary,
+  no clever metaphors that need a second read. The ONLY hard words allowed are the real
+  legal terms (tribunal, struck off, injunction, inquest) — keep those, never explain
+  them, but keep every OTHER word plain. If a line needs thinking to get, rewrite it
+  simpler. Read it as if said out loud to a friend.
 - SPEAKERS / ON-SCREEN. A dialogue scene shows everyone the story really puts in that
   room — not only the people who talk:
     * "characters" = the SPEAKERS — AT MOST THREE. This is not a model limit: the whole
@@ -288,6 +295,12 @@ FOR EACH SCENE also give:
   scene continues the same stretch of time (even in a new place, like stepping off the
   train onto the platform moments later), it is false. Be sparing: most scenes are
   false. This is the only thing that earns a fade to black between scenes.
+- Every scene needs "sfx": ONE short, specific real-world SOUND that punches up this
+  scene's key moment — an event sound, NOT music and NOT background room tone. It should
+  be the one thing you'd HEAR in this beat: e.g. "train doors chime and hiss shut", "a
+  phone buzzes twice on a hard table", "a single gavel crack", "hurried footsteps echo
+  down a stone corridor", "a heavy door slams". Keep it to a few words, concrete and
+  literal (a thing that makes a sound), so it can be generated cleanly and dropped in.
 - For DIALOGUE lines, an "emotion": the delivery cue PLUS a readable facial
   micro-expression, so the face actually performs instead of sitting flat (e.g.
   "smug, one eyebrow raised", "cold, jaw tight", "panicked, eyes darting",
@@ -301,8 +314,8 @@ Return ONLY valid JSON with exactly this shape:
   "title": "short episode title",
   "setting": "one line: the real place where this drama happens",
   "scenes": [
-    {"type": "narration", "beat": "intro", "setting": "a fitting place the story put the protagonist (e.g. a holding cell)", "detail": "one object that identifies this place (e.g. a barred cell door, a case bundle)", "time_jump": false, "shot": "shot + camera on the lone protagonist", "action": "what the protagonist ALONE physically does while speaking to us (paces, sits, stares out)", "characters": ["Exact Protagonist Name"], "narration": "first-person narration the protagonist speaks to camera", "dialogue": []},
-    {"type": "dialogue", "beat": "setup", "setting": "the real place", "detail": "one object that identifies this place (e.g. a brass nameplate, a gavel, a stack of case files)", "time_jump": false, "shot": "shot + camera", "action": "blocking for EVERYONE onscreen: each speaker + any silent reactors and what they do", "onscreen": ["Exact Name A", "Exact Name B", "Exact Name C"], "characters": ["Exact Name A", "Exact Name B"], "narration": "the protagonist's first-person voiceover played OVER this scene — what it meant, not a transcript of the lines", "dialogue": [{"character": "Exact Name A", "line": "what is silently mouthed", "emotion": "cue", "reaction": "how B silently reacts"}, {"character": "Exact Name B", "line": "reply", "emotion": "cue", "reaction": "how A silently reacts"}]}
+    {"type": "narration", "beat": "intro", "setting": "a fitting place the story put the protagonist (e.g. a holding cell)", "detail": "one object that identifies this place (e.g. a barred cell door, a case bundle)", "time_jump": false, "sfx": "one specific real-world sound for this beat (e.g. a barred door clangs shut)", "shot": "shot + camera on the lone protagonist", "action": "what the protagonist ALONE physically does while speaking to us (paces, sits, stares out)", "characters": ["Exact Protagonist Name"], "narration": "first-person narration the protagonist speaks to camera", "dialogue": []},
+    {"type": "dialogue", "beat": "setup", "setting": "the real place", "detail": "one object that identifies this place (e.g. a brass nameplate, a gavel, a stack of case files)", "time_jump": false, "sfx": "one specific real-world sound for this beat (e.g. a phone buzzes twice on a hard table)", "shot": "shot + camera", "action": "blocking for EVERYONE onscreen: each speaker + any silent reactors and what they do", "onscreen": ["Exact Name A", "Exact Name B", "Exact Name C"], "characters": ["Exact Name A", "Exact Name B"], "narration": "the protagonist's first-person voiceover played OVER this scene — what it meant, not a transcript of the lines", "dialogue": [{"character": "Exact Name A", "line": "what is silently mouthed", "emotion": "cue", "reaction": "how B silently reacts"}, {"character": "Exact Name B", "line": "reply", "emotion": "cue", "reaction": "how A silently reacts"}]}
   ]
 }
 """
@@ -332,6 +345,9 @@ def clean_scenes(script: dict, valid_names: list = None, lead: str = None) -> di
             # whether real time passed before this scene (drives the dip-to-black).
             "detail": (sc.get("detail") or "").strip(),
             "time_jump": bool(sc.get("time_jump", False)),
+            # One punchy real-world sound effect for this scene's key moment (generated
+            # by ElevenLabs in scene_clips, mixed in by assemble) — kills the flatness.
+            "sfx": (sc.get("sfx") or "").strip(),
             "shot": sc.get("shot", ""),
             "action": sc.get("action", ""),
             "characters": [],   # the SPEAKERS (<=2, get voices)

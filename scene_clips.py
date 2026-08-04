@@ -75,6 +75,10 @@ IMAGE_MODEL = "fal-ai/nano-banana-pro"            # text-to-image (detail with n
 # (2 faces); LatentSync is cheaper and drives NARRATION (1 face). Seedance still renders WITH
 # audio so the mouths are already moving — lip-sync needs a talking source, not a still face.
 TTS_MODEL = "eleven_multilingual_v2"                # ElevenLabs text-to-speech (correct words)
+# Voice settings tuned for CLARITY — the narration is the ONLY voice in the video and it's
+# watched while scrolling, so it must be easy to catch. Steady (higher stability) so words
+# don't slur, and a touch slower (speed 0.95) so each line lands.
+VOICE_SETTINGS = {"stability": 0.55, "similarity_boost": 0.75, "style": 0.0, "speed": 0.95}
 SYNC_MODEL = "fal-ai/sync-lipsync/v2"              # dialogue re-dub: 2-face active-speaker sync
 LATENTSYNC_MODEL = "fal-ai/latentsync"            # narration re-dub: single-face, cheaper
 # 720p is Seedance's balanced tier and the price we budgeted ($0.052/s with audio); the
@@ -601,7 +605,8 @@ def tts(voice_id: str, text: str, out_path: str):
         r = requests.post(
             f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_44100_128",
             headers={"xi-api-key": ELEVEN_KEY},
-            json={"text": text, "model_id": TTS_MODEL}, timeout=120)
+            json={"text": text, "model_id": TTS_MODEL, "voice_settings": VOICE_SETTINGS},
+            timeout=120)
         if r.status_code != 200:
             print(f"    tts failed {r.status_code}: {r.text[:120]}")
             return 0.0, 0
@@ -748,6 +753,63 @@ def make_music(out_path: str, seconds: int = 22) -> float:
     except Exception as e:
         print(f"    music bed error ({e})")
         return 0.0
+
+
+# One punchy real-world SOUND per scene (a door slam, a phone buzz, a gavel crack),
+# suggested by the script per scene and generated here, then mixed a beat into the clip
+# UNDER the voiceover. This is what stops a narration-only video feeling flat — a real
+# event sound lands on the key moment. It is NOT the looping ambient bed (that is steady
+# room tone) and NOT music; it's a single short hit.
+SFX_SECONDS = 3            # a short one-shot; ElevenLabs needs a duration, 3s covers a hit
+SFX_VOL = 0.5              # loud enough to feel, clearly under the narration voice
+SFX_DELAY_MS = 300         # start it a beat into the clip, not on the very first frame
+
+
+def make_sfx(text: str, out_path: str, seconds: int = SFX_SECONDS) -> float:
+    """Generate ONE short one-shot sound effect from the scene's `sfx` description
+    (ElevenLabs Sound-Effects, loop=False). Returns the generated seconds (for cost),
+    or 0.0 on failure — in which case the scene simply gets no effect."""
+    text = (text or "").strip()
+    if not text:
+        return 0.0
+    try:
+        r = requests.post(
+            "https://api.elevenlabs.io/v1/sound-generation",
+            headers={"xi-api-key": ELEVEN_KEY, "Content-Type": "application/json"},
+            json={"text": text, "duration_seconds": seconds, "loop": False},
+            timeout=120,
+        )
+        if r.status_code != 200:
+            print(f"    sfx failed {r.status_code}: {r.text[:120]}")
+            return 0.0
+        with open(out_path, "wb") as f:
+            f.write(r.content)
+        return float(seconds)
+    except Exception as e:
+        print(f"    sfx error ({e})")
+        return 0.0
+
+
+def mix_sfx_into_clip(clip_path: str, sfx_path: str) -> bool:
+    """Mix the one-shot sound effect INTO a finished clip's audio, a beat in and under the
+    voiceover (normalize=0 so the narration stays at full level and the effect just adds on
+    top). Rewrites the clip in place. On any failure the clip is left untouched."""
+    tmp = clip_path + ".sfx.mp4"
+    fc = (f"[1:a]aresample=44100,aformat=channel_layouts=stereo,"
+          f"adelay={SFX_DELAY_MS}|{SFX_DELAY_MS},volume={SFX_VOL}[s];"
+          f"[0:a][s]amix=inputs=2:duration=first:normalize=0[a]")
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", clip_path, "-i", sfx_path,
+                        "-filter_complex", fc, "-map", "0:v", "-map", "[a]",
+                        "-c:v", "copy", "-c:a", "aac", "-ar", "44100", "-ac", "2", tmp],
+                       check=True, capture_output=True)
+        os.replace(tmp, clip_path)
+        return True
+    except Exception as e:
+        print(f"    (could not mix sfx in: {e}); leaving the clip without it")
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        return False
 
 
 def extract_last_frame(clip_path: str, out_path: str) -> bool:
@@ -1276,6 +1338,15 @@ def main():
         for f in (src, dub):
             if os.path.exists(f):
                 os.remove(f)
+        # Mix this scene's suggested sound effect into the clip (a beat in, under the VO),
+        # so the video has a real event sound on its key moment instead of flat narration.
+        sfx_text = (sc.get("sfx") or "").strip()
+        if sfx_text:
+            sfx_path = os.path.join(OUT_DIR, f"sfx_{i:02d}.mp3")
+            if not os.path.exists(sfx_path):
+                ambient_seconds += make_sfx(sfx_text, sfx_path)
+            if os.path.exists(sfx_path):
+                mix_sfx_into_clip(clip_path, sfx_path)
         sc["beats"] = insert_beats + [beat]
         print(f"  [{i}] {sc.get('type','scene').upper()} [{who}] -> {clip_name} "
               f"(silent {dur} + VO){' + detail' if insert_beats else ''}")

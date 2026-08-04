@@ -21,10 +21,13 @@ import os
 import sys
 import json
 import re
+import random
+import requests
 from dotenv import load_dotenv
 import costs
 
 load_dotenv()
+ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY")
 
 OUT_DIR = "output"
 
@@ -32,6 +35,44 @@ OUT_DIR = "output"
 # film (swap these IDs for your own cloned brand voices later if you want).
 FEMALE_VOICES = ["EXAVITQu4vr4xnSDxMaL", "cgSgspJ2msm6clMCkdW9"]
 MALE_VOICES = ["JBFqnCBsd6RMkjVDRZzb", "nPczCjzI2devNBz1zQrb"]
+
+# The NARRATOR (the lead) is the ONLY voice the viewer hears in the memoir style. We pick a
+# DIFFERENT narrator voice at RANDOM for each video (so the channel doesn't sound like the
+# same person every time) from ALL the voices on the ElevenLabs account, matched to the
+# lead's gender. Set NARRATOR_RANDOM = False and NARRATOR_VOICE = "<id>" to pin one instead.
+NARRATOR_RANDOM = True
+NARRATOR_VOICE = None
+
+# Fallback voice pools (premade ElevenLabs IDs) used only if listing the account's voices
+# fails, so a video can still be made offline from the API's voice library.
+FALLBACK_MALE = ["JBFqnCBsd6RMkjVDRZzb", "nPczCjzI2devNBz1zQrb", "pNInz6obpgDQGcFmaJgB",
+                 "TxGEqnHWrfWFTfGW9XjX", "onwK4e9ZLuTAKqWW03F9", "pqHfZKP75CvOlQylNhV4"]
+FALLBACK_FEMALE = ["EXAVITQu4vr4xnSDxMaL", "cgSgspJ2msm6clMCkdW9", "XrExE9yKIg1WjnnlVkGX",
+                   "pFZP5JQG7iQjIQuC4Bku", "Xb7hH8MSUJpSbSDYk0k2"]
+
+
+def account_voices(gender: str) -> list:
+    """All voice_ids on the ElevenLabs account that match `gender`, so we can pick a fresh
+    narrator at random each video from the FULL library (not a hard-coded five or six).
+    Reads the voice's own gender label; if none match, returns every voice. Falls back to
+    the built-in pool if the account can't be listed."""
+    try:
+        r = requests.get("https://api.elevenlabs.io/v1/voices",
+                         headers={"xi-api-key": ELEVEN_KEY}, timeout=30)
+        if r.status_code == 200:
+            voices = r.json().get("voices", [])
+            matched = [v["voice_id"] for v in voices
+                       if (v.get("labels") or {}).get("gender", "").lower() == gender]
+            allv = [v["voice_id"] for v in voices]
+            if matched:
+                return matched
+            if allv:
+                return allv
+        else:
+            print(f"  (voice list failed {r.status_code}; using fallback pool)")
+    except Exception as e:
+        print(f"  (could not list account voices: {e}; using fallback pool)")
+    return FALLBACK_MALE if gender == "male" else FALLBACK_FEMALE
 
 
 def slug(name: str) -> str:
@@ -96,6 +137,21 @@ def main():
             sc.get("type") == "narration" and name in sc.get("characters", [])
             for sc in scenes) else ""
         print(f"  {name}{tag}: ElevenLabs {vid}")
+
+    # Give the NARRATOR (lead = first non-anonymous character) their voice — this is the ONLY
+    # voice the viewer hears. Default: a DIFFERENT random voice each video, from the whole
+    # account library, matched to the lead's gender, so the channel varies video to video.
+    lead = next((c["fictional_name"] for c in data.get("characters", [])
+                 if not c.get("anonymous")), None)
+    if lead and chars_by_name.get(lead):
+        if NARRATOR_RANDOM:
+            g = character_gender(chars_by_name[lead])
+            vid = random.choice(account_voices(g))
+            chars_by_name[lead]["voice_id"] = vid
+            print(f"  narrator {lead}: random {g} voice {vid}")
+        elif NARRATOR_VOICE:
+            chars_by_name[lead]["voice_id"] = NARRATOR_VOICE
+            print(f"  narrator {lead}: pinned voice {NARRATOR_VOICE}")
 
     # Free step (IDs only); the Speech-to-Speech re-voicing is billed in scene_clips.
     costs.record(data, "voices",
