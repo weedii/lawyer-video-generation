@@ -69,9 +69,14 @@ MAX_SPEAKERS = 3
 MAX_ONSCREEN = 4
 SYSTEM_PROMPT = """
 You write short vertical TikTok microdramas for an audience of young lawyers,
-based on a REAL legal news story. Write it as a SHORT FILM broken into SCENES —
-each scene is one continuous shot where the characters act and talk TO EACH OTHER
-in the same room, like real actors. This is NOT one person talking to camera.
+based on a REAL legal news story. Write it as a first-person MEMOIR SHORT FILM.
+ONE lead character — the PROTAGONIST — narrates the WHOLE story in voiceover
+(first person), and that voiceover plays over EVERY scene. We SEE the other
+characters act and confront each other in real rooms like a short film, but we do
+NOT hear their dialogue — the protagonist's voiceover is the only voice the viewer
+hears (think Goodfellas / prestige-drama narration). The on-screen characters still
+act and mouth their lines so the scene feels alive, but their words are never heard.
+This is NOT talking-head avatars, and it is NOT people talking to camera.
 
 Speakers:
 - Use ONLY the given characters for dialogue. Write each "character" field EXACTLY
@@ -104,18 +109,31 @@ THE NARRATOR IS THE MAIN CHARACTER (first-person memoir — this is the style):
   voice — it is the protagonist looking back and telling us THEIR OWN story in the
   FIRST PERSON ("I built that firm from nothing", "I should have seen it coming",
   "That was the morning it all fell apart").
-- Every NARRATION scene is the protagonist ALONE, PERFORMING to camera: they are in
-  a place that fits where the story has taken them (a holding cell, the empty
-  tribunal room, the courthouse steps, chambers late at night, walking a corridor),
-  DOING something small and real (pacing, sitting on the bunk, staring out a window,
-  walking slowly) WHILE they speak their narration aloud to us. They ACT it — body
-  and voice, mouth moving, looking straight at us. This is a performance, not a
-  voiceover.
+- Every NARRATION scene is the protagonist ALONE in a place that fits where the story
+  has taken them (a holding cell, the empty tribunal room, the courthouse steps,
+  chambers late at night, walking a corridor), DOING something small and real (pacing,
+  sitting on the bunk, staring out a window, walking slowly). We HEAR their first-person
+  voiceover over the shot — but they do NOT speak aloud on camera: mouth closed, lost in
+  thought. It is their inner voice, not a to-camera speech. They may glance toward us,
+  but they are never talking to the lens.
 - The protagonist for THIS video is named in the user message ("NARRATOR: ..."). Use
   that EXACT name. Write every narration beat in their first-person voice, and put
   that one name in the narration scene's "characters" (a one-person list).
-- The DIALOGUE scenes are the opposite: there the characters act and talk TO EACH
-  OTHER and NEVER look at the camera. Only the protagonist's solo narration faces us.
+- The DIALOGUE scenes show the characters act and mouth their lines TO EACH OTHER and
+  NEVER look at the camera — but those words are NOT heard. The protagonist's first-person
+  voiceover plays over the scene and is the only voice we hear.
+
+VOICEOVER CARRIES EVERY SCENE (this is the core of the format):
+- EVERY scene — narration AND dialogue — has a "narration" field: the protagonist's
+  first-person voiceover that plays over it. It is the ONLY audio the viewer hears.
+- For a DIALOGUE scene, the voiceover tells us what this confrontation was or what it
+  meant, in the protagonist's own voice — NOT a transcript of the dialogue. E.g. over a
+  shot of two colleagues arguing on a train: "She was the only one who ever called me
+  out. I should have listened." It must NOT repeat the lines, and NOT describe the
+  picture — it adds meaning, judgement, hindsight, or a jump in time.
+- Still write the on-screen "dialogue" for the dialogue scenes: it is what the actors
+  silently mouth so the scene feels alive. Keep it short and real, but remember the
+  viewer never hears it — the voiceover does the storytelling.
 
 INTRODUCE NEW FACES (so the viewer is never confused):
 - PRE-NAME every important character BEFORE their face first appears. In the scene (or
@@ -284,7 +302,7 @@ Return ONLY valid JSON with exactly this shape:
   "setting": "one line: the real place where this drama happens",
   "scenes": [
     {"type": "narration", "beat": "intro", "setting": "a fitting place the story put the protagonist (e.g. a holding cell)", "detail": "one object that identifies this place (e.g. a barred cell door, a case bundle)", "time_jump": false, "shot": "shot + camera on the lone protagonist", "action": "what the protagonist ALONE physically does while speaking to us (paces, sits, stares out)", "characters": ["Exact Protagonist Name"], "narration": "first-person narration the protagonist speaks to camera", "dialogue": []},
-    {"type": "dialogue", "beat": "setup", "setting": "the real place", "detail": "one object that identifies this place (e.g. a brass nameplate, a gavel, a stack of case files)", "time_jump": false, "shot": "shot + camera", "action": "blocking for EVERYONE onscreen: each speaker + any silent reactors and what they do", "onscreen": ["Exact Name A", "Exact Name B", "Exact Name C"], "characters": ["Exact Name A", "Exact Name B"], "narration": "", "dialogue": [{"character": "Exact Name A", "line": "what is said", "emotion": "cue", "reaction": "how B silently reacts"}, {"character": "Exact Name B", "line": "reply", "emotion": "cue", "reaction": "how A silently reacts"}]}
+    {"type": "dialogue", "beat": "setup", "setting": "the real place", "detail": "one object that identifies this place (e.g. a brass nameplate, a gavel, a stack of case files)", "time_jump": false, "shot": "shot + camera", "action": "blocking for EVERYONE onscreen: each speaker + any silent reactors and what they do", "onscreen": ["Exact Name A", "Exact Name B", "Exact Name C"], "characters": ["Exact Name A", "Exact Name B"], "narration": "the protagonist's first-person voiceover played OVER this scene — what it meant, not a transcript of the lines", "dialogue": [{"character": "Exact Name A", "line": "what is silently mouthed", "emotion": "cue", "reaction": "how B silently reacts"}, {"character": "Exact Name B", "line": "reply", "emotion": "cue", "reaction": "how A silently reacts"}]}
   ]
 }
 """
@@ -495,17 +513,18 @@ def append_markdown(script: dict, path: str):
         beat = sc.get("beat", "")
         lines.append(f"\n**Scene {i} ({beat}) — {sc.get('shot', '')}**")
         lines.append(f"_{sc.get('action', '')}_")
-        if sc.get("type") == "narration":
-            who = (sc.get("characters") or ["Narrator"])[0]
-            lines.append(f"- _{who} (to camera):_ {sc.get('narration', '')}")
-        else:
+        # The voiceover is now what the viewer HEARS on every scene, so show it first.
+        who = (sc.get("characters") or ["Narrator"])[0] if sc.get("type") == "narration" else "narrator"
+        if sc.get("narration"):
+            lines.append(f"- _VO ({who}):_ {sc.get('narration', '')}")
+        if sc.get("type") != "narration":
             onscreen = sc.get("onscreen") or sc.get("characters", [])
             speakers = set(sc.get("characters", []))
             tags = [n if n in speakers else f"{n} (silent)" for n in onscreen]
-            lines.append(f"_On screen: {', '.join(tags)}_")
+            lines.append(f"_On screen (silent, mouthed only): {', '.join(tags)}_")
             for d in sc.get("dialogue", []):
                 emo = f" [{d['emotion']}]" if d.get("emotion") else ""
-                lines.append(f"- **{d['character']}**{emo}: {d['line']}")
+                lines.append(f"- _{d['character']}{emo}: {d['line']}_")
     with open(path, "a") as f:
         f.write("\n".join(lines) + "\n")
 

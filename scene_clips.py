@@ -1,37 +1,29 @@
-"""STAGE 2 - STEP 3: Make one cinematic CLIP per SCENE (Seedance + our-voice pipeline).
+"""STAGE 2 - STEP 3: Make one cinematic CLIP per SCENE (memoir VOICEOVER pipeline).
 
-The unit is a SCENE — a real short-film shot where the characters act and talk TO
-EACH OTHER in the same room. Two kinds of scene:
+The whole video is a first-person MEMOIR: ONE voice — the protagonist's — narrates
+every scene, over cinematic silent footage. There is NO synced character dialogue and
+NO lip-sync anywhere, which is exactly what removes the whole class of bugs we hit
+before (wrong voice on the wrong face, garbled two-person clips, geography jumps when
+composing reverse angles). Every scene, dialogue or narration, is built the same way:
 
-  DIALOGUE scene:
-    1. Compose ONE image with the scene's on-screen cast together in the setting
-       (Nano Banana Pro edit, using their locked portraits so faces stay the same).
-    2. Render ONE Seedance 1.5 pro clip for the WHOLE scene: both people act and
-       say their lines in a single generation (Seedance animates + speaks it in ITS
-       OWN invented voice, with native lip-sync). We keep those native voices for
-       dialogue — pulling two speakers apart to swap in our cloned voices would need
-       per-speaker diarisation (a later upgrade).
-    Each scene is one clip (a "beat"). The editor (assemble.py) joins the beats with
-    a continuous ambient bed and soft/staggered cuts, which is what makes the
-    conversation read as one smooth scene.
+  1. Compose ONE image of the scene's on-screen cast in the setting (Nano Banana Pro
+     edit, from their locked portraits so faces stay the same). Narration scenes are
+     the lone protagonist; dialogue scenes hold everyone the beat puts in the room.
+  2. Render ONE **silent** Seedance 1.5 pro clip of that image — the characters act and
+     (for dialogue) silently mouth their lines; the protagonist in narration is
+     contemplative, mouth closed. Silent = the cheaper $0.026/s rate and nothing to
+     lip-sync.
+  3. Lay the LEAD's first-person VOICEOVER for that scene on top (ElevenLabs TTS in the
+     lead's one fixed voice). No sync — the picture is trimmed to the voice length.
 
-  NARRATION scene (hook / bridge / cliffhanger) — MEMOIR style:
-    The lone PROTAGONIST performs the narration straight to camera (first person),
-    one Seedance clip (one beat), then RE-VOICED into their own locked ElevenLabs
-    voice with Speech-to-Speech (which keeps the exact timing so the lip-sync still
-    matches). Re-voicing only the recurring narrator keeps the lead's voice
-    consistent across every video without needing to split a two-speaker clip.
+Each scene is one clip (a "beat"); a NEW location also gets a short silent detail
+insert. The editor (assemble.py) joins the beats with a continuous ambient bed, ducked
+music and location cards. One voice across the whole film = perfect voice consistency,
+zero lip-sync risk.
 
-We also generate ONE looping ambient bed per location (ElevenLabs Sound-Effects)
-and record it on each scene, so the editor can lay continuous room tone under the
-cuts.
-
-Why Seedance (and not Veo): Veo's likeness filter refuses our AI-invented faces on
-~half of all clips (a Google policy that fires on fal, the Gemini API AND Vertex —
-not promptable-around). Seedance 1.5 pro holds the same two faces, does native
-lip-sync, is NOT blocked, and is far cheaper ($0.052/s vs Veo's $0.10-0.15/s), so a
-whole video comes in under budget. It runs on fal's queue, so the crash-safe
-submit/poll/resume machinery below is unchanged.
+Why Seedance: it holds our AI-invented faces (Veo's likeness filter refused them on
+~half of clips), runs on fal's crash-safe queue, and is cheap — and here we only ever
+use its SILENT tier.
 
 Usage:
     python scene_clips.py
@@ -39,10 +31,9 @@ Usage:
 Reads:  output/analysis.json   (characters w/ portraits + voice_id, script scenes)
 Output: output/clip_XX.mp4 (one per scene) + insert_XX.mp4 (detail beats); writes
         each scene's ordered scene["beats"] list + scene["ambient"] bed.
-Cost:   Seedance 1.5 pro (fal) — $0.052/s at 720p WITH audio (spoken scenes),
-        $0.026/s WITHOUT audio (silent detail inserts) — + ElevenLabs
-        Speech-to-Speech ~$0.002/s + $0.15 per composed scene image
-        + ~$0.002/s ambient beds.
+Cost:   Seedance 1.5 pro (fal) — $0.026/s at 720p SILENT (every scene clip + detail
+        inserts) + ElevenLabs TTS (the lead voiceover, per character) + $0.15 per
+        composed scene image + ~$0.002/s ambient beds. No lip-sync models.
 """
 import os
 import sys
@@ -1039,6 +1030,24 @@ def narration_prompt(sc: dict, lead_c: dict) -> str:
     )
 
 
+def build_narration_vo_prompt(sc: dict, lead_c: dict) -> str:
+    """Silent-motion prompt for a NARRATION beat in the voiceover style: the lone
+    protagonist is present in a fitting place and moves naturally, but does NOT speak on
+    camera — mouth closed, lost in thought — because we hear their voiceover instead. No
+    lip movement means nothing to lip-sync and nothing to look wrong under the VO."""
+    who = descriptor(lead_c).capitalize() if lead_c else "The narrator"
+    lock = identity_lock(lead_c) if lead_c else ""
+    lock_line = f" ({lock})" if lock else ""
+    return (
+        "The scene is already in motion from the very first frame. ONE person is ALONE in "
+        f"the shot, nobody else present. {sc.get('shot', 'slow push-in on a lone figure')}. "
+        f"{sc.get('action', '')}. {who}{lock_line} is lost in thought — contemplative, "
+        "MOUTH CLOSED, NOT speaking, NOT talking to the camera. They breathe and move "
+        "naturally and may glance toward the lens, but they say nothing: no lip movement, no "
+        f"speech. {STYLE}."
+    )
+
+
 def main():
     analysis_path = os.path.join(OUT_DIR, "analysis.json")
     if not os.path.exists(analysis_path):
@@ -1056,11 +1065,17 @@ def main():
     named = [c for c in data.get("characters", []) if not c.get("anonymous")]
     main_names = [c["fictional_name"] for c in named[:2] if c.get("file")]
 
-    video_seconds = 0.0     # Seedance video seconds WITH audio (spoken scenes, $0.052/s)
+    # ONE voice for the whole video: the PROTAGONIST's first-person voiceover (memoir style).
+    # Same pick as scene_writer.lead_name — the first non-anonymous character. Every scene,
+    # dialogue or narration, is narrated by this one lead, so there is exactly one voice and
+    # never any lip-sync to get wrong.
+    lead_name = next((c["fictional_name"] for c in data.get("characters", [])
+                      if not c.get("anonymous")), None) or (main_names[0] if main_names else None)
+    lead_c = chars_by_name.get(lead_name, {})
+
+    scene_video_seconds = 0.0   # Seedance SILENT scene clips ($0.026/s — every clip is silent now)
     detail_video_seconds = 0.0  # Seedance seconds for silent detail inserts ($0.026/s, no audio)
-    tts_chars = 0           # ElevenLabs text-to-speech characters (correct-voice lines)
-    sync_seconds = 0.0      # Sync 2.0 dialogue re-dub seconds ($0.05/s)
-    latentsync_clips = 0    # LatentSync narration re-dubs ($0.20 flat each, clips are < 40s)
+    tts_chars = 0               # ElevenLabs TTS characters (the lead's voiceover, one voice)
     ambient_seconds = 0.0   # ElevenLabs Sound-Effects seconds (ambient beds + music)
     scene_images = 0        # composed images we paid for (scene composites + details)
     location_ref = {}       # setting -> first image made there (keep the room identical)
@@ -1194,70 +1209,19 @@ def main():
             print(f"  [{i}] skipped: no scene image could be composed.")
             continue
 
-        # --- NARRATION: TTS the correct words -> Seedance source clip -> LatentSync re-dub ---
-        if sc.get("type") == "narration":
-            beat = {"file": clip_name, "kind": "narration", "speaker": names[0], "silent": False}
-            # Resume guard: a finished narration clip on disk is reused for free.
-            if os.path.exists(clip_path):
-                sc["beats"] = [beat]
-                print(f"  [{i}] NARRATION [{names[0]}] -> {clip_name} (reused, $0)")
-                continue
-            lead_c = chars_by_name.get(names[0], {})
-            if DRAFT:                                  # cheap preview: silent clip, no TTS/re-dub
-                if make_video_clip(start_img, narration_prompt(sc, lead_c), "5s",
-                                   clip_path, generate_audio=False) > 0:
-                    sc["beats"] = [beat]
-                    print(f"  [{i}] NARRATION [{names[0]}] -> {clip_name} (DRAFT preview)")
-                continue
-            # 1) Make the correct words in the lead's own voice FIRST, so we can size the
-            #    Seedance clip to fit them (no word cut on the re-dub).
-            dub = os.path.join(OUT_DIR, f"_dub_{i:02d}.mp3")
-            a_secs, a_chars = tts(lead_c.get("voice_id", ""), sc.get("narration", ""), dub)
-            if a_secs <= 0:
-                print(f"  [{i}] NARRATION skipped: could not make the voice line.")
-                continue
-            tts_chars += a_chars
-            # 2) Render the Seedance SOURCE (protagonist talking to camera), a bit LONGER
-            #    than the voice. It keeps audio ON so the mouth is already moving.
-            src = os.path.join(OUT_DIR, f"_src_{i:02d}.mp4")
-            dur = "5s" if DRAFT else fit_duration(a_secs)
-            if not os.path.exists(src):
-                secs = make_video_clip(start_img, narration_prompt(sc, lead_c), dur, src,
-                                       generate_audio=not DRAFT)
-                if secs == 0.0 or not os.path.exists(src):
-                    print(f"  [{i}] NARRATION skipped: Seedance could not generate this beat.")
-                    continue
-                video_seconds += secs
-            # 3) Re-dub the mouth onto our correct voice (single face -> LatentSync).
-            if lipsync(src, dub, clip_path, two_faces=False):
-                latentsync_clips += 1
-            else:
-                print("    (lip-sync failed; keeping the Seedance clip with our voice muxed)")
-                _mux_audio(src, dub, clip_path)
-            for f in (src, dub):
-                if os.path.exists(f):
-                    os.remove(f)
-            sc["beats"] = [beat]
-            print(f"  [{i}] NARRATION [{names[0]}] -> {clip_name} (Seedance {dur} + re-dub)")
-            continue
-
-        # --- DIALOGUE: Seedance source clip (continuous talking) -> Sync 2.0 re-dub ---
-        # Both people talk in ONE Seedance clip so the exchange is a single shot. Seedance's
-        # own words are garbled and mis-timed, so we THROW THEM AWAY: ElevenLabs speaks the
-        # correct lines in each character's voice, and Sync 2.0 re-dubs the clip's two mouths
-        # onto that audio (its active-speaker detection maps each voice to the right face).
+        # --- VO SCENE: SILENT cinematic clip + the LEAD's first-person voiceover over it ---
+        # ONE voice carries the whole video: the protagonist narrating. We render the scene
+        # as SILENT motion (characters act / mouth their lines, muted — no lip-sync anywhere,
+        # so nothing can put the wrong voice on the wrong mouth), then lay the lead's
+        # voiceover on top. Narration and dialogue scenes share this single path.
+        is_narr = sc.get("type") == "narration"
         speakers = sc.get("characters", [])
-        if not sc.get("dialogue"):
-            print(f"  [{i}] DIALOGUE skipped: no lines.")
-            continue
+        who = names[0] if is_narr else " + ".join(speakers)
 
-        # Detail insert: the FIRST time we enter a location, open on a silent, face-free
-        # shot of one identifying object, so the viewer is oriented before the scene
-        # starts. Made once per location (detail_by_loc), then prepended to this scene's
-        # beats. Same-location continuations get nothing. Marked seen even on failure so
-        # we don't retry it every scene.
+        # Detail insert (dialogue scenes only): open a NEW location on a silent, face-free
+        # object shot so the viewer is oriented before the scene starts. Once per location.
         insert_beats = []
-        if loc_key not in detail_by_loc:
+        if not is_narr and loc_key not in detail_by_loc:
             detail_by_loc[loc_key] = None
             ins, imgs, dsecs = make_detail_insert(
                 i, sc.get("detail", ""), sc_setting, room_ref or start_img)
@@ -1267,72 +1231,69 @@ def main():
                 detail_by_loc[loc_key] = ins
                 insert_beats = [ins]
 
-        dialogue_beat = {"file": clip_name, "kind": "dialogue",
-                         "speaker": None, "silent": False}
+        beat = {"file": clip_name, "kind": sc.get("type", "dialogue"),
+                "speaker": lead_name if is_narr else None, "silent": False}
 
-        # Resume guard: a finished scene clip on disk is reused for free.
+        # Resume guard: a finished clip on disk is reused for free.
         if os.path.exists(clip_path):
-            sc["beats"] = insert_beats + [dialogue_beat]
-            print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {clip_name} "
-                  f"(reused, already on disk, $0){' + detail' if insert_beats else ''}")
+            sc["beats"] = insert_beats + [beat]
+            print(f"  [{i}] {sc.get('type','scene').upper()} [{who}] -> {clip_name} (reused, $0)")
             continue
 
-        if DRAFT:                                  # cheap preview: silent clip, no TTS/re-dub
-            if make_video_clip(start_img, build_scene_prompt(sc, chars_by_name), "5s",
-                               clip_path, generate_audio=False) > 0:
-                sc["beats"] = insert_beats + [dialogue_beat]
-                print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {clip_name} (DRAFT preview)")
+        # Silent-motion prompt: narration = the lead alone, contemplative (mouth closed);
+        # dialogue = the on-screen cast act and silently mouth their lines.
+        prompt = (build_narration_vo_prompt(sc, lead_c) if is_narr
+                  else build_scene_prompt(sc, chars_by_name))
+
+        if DRAFT:                                  # cheap preview: silent clip, no VO
+            if make_video_clip(start_img, prompt, "5s", clip_path, generate_audio=False) > 0:
+                sc["beats"] = insert_beats + [beat]
+                print(f"  [{i}] {sc.get('type','scene').upper()} [{who}] -> {clip_name} (DRAFT)")
             continue
 
-        # 1) Correct words in each speaker's voice FIRST, so we can size the clip to fit.
+        # 1) The lead's voiceover for THIS scene (first person). One voice for the whole video.
+        vo_text = (sc.get("narration") or "").strip()
         dub = os.path.join(OUT_DIR, f"_dub_{i:02d}.mp3")
-        a_secs, a_chars = build_line_audio(sc.get("dialogue", []), chars_by_name, dub)
-        if a_secs <= 0:
-            print(f"  [{i}] DIALOGUE skipped: could not make the voice lines.")
-            continue
-        tts_chars += a_chars
-        # 2) Render the Seedance SOURCE clip (both people talking, a bit LONGER than the
-        #    voice track). Audio ON so the mouths are already moving for the re-dub.
+        vo_secs, vo_chars = tts(lead_c.get("voice_id", ""), vo_text, dub) if vo_text else (0.0, 0)
+        tts_chars += vo_chars
+
+        # 2) Render the SILENT Seedance clip, sized to cover the voiceover (a touch longer so
+        #    the VO is never clipped). No-audio = half price and nothing to lip-sync.
+        dur = fit_duration(vo_secs) if vo_secs > 0 else scene_duration(sc.get("dialogue", []))
         src = os.path.join(OUT_DIR, f"_src_{i:02d}.mp4")
-        dur = "5s" if DRAFT else fit_duration(a_secs)
-        if not os.path.exists(src):
-            secs = make_video_clip(start_img, build_scene_prompt(sc, chars_by_name),
-                                   dur, src, generate_audio=not DRAFT)
-            if secs == 0.0 or not os.path.exists(src):
-                print(f"  [{i}] DIALOGUE skipped: Seedance could not generate it.")
-                continue
-            video_seconds += secs
-        # 3) Re-dub the two mouths onto our correct voices (two faces -> Sync 2.0).
-        if lipsync(src, dub, clip_path, two_faces=True):
-            sync_seconds += a_secs                 # Sync bills per output-video second
-        else:
-            print("    (sync re-dub failed; keeping the Seedance clip with our voices muxed)")
+        secs = make_video_clip(start_img, prompt, dur, src, generate_audio=False)
+        if secs == 0.0 or not os.path.exists(src):
+            print(f"  [{i}] {sc.get('type','scene').upper()} skipped: Seedance could not render it.")
+            continue
+        scene_video_seconds += secs
+
+        # 3) Lay the voiceover over the silent clip (NO lip-sync). -shortest trims the picture
+        #    to the voice, so the finished clip is exactly as long as the narration.
+        if vo_secs > 0:
             _mux_audio(src, dub, clip_path)
+        else:
+            os.replace(src, clip_path)             # no VO text -> keep the silent clip as-is
         for f in (src, dub):
             if os.path.exists(f):
                 os.remove(f)
-        sc["beats"] = insert_beats + [dialogue_beat]
-        print(f"  [{i}] DIALOGUE [{' + '.join(speakers)}] -> {clip_name} "
-              f"(Seedance {dur} + Sync 2.0 re-dub){' + detail' if insert_beats else ''}")
+        sc["beats"] = insert_beats + [beat]
+        print(f"  [{i}] {sc.get('type','scene').upper()} [{who}] -> {clip_name} "
+              f"(silent {dur} + VO){' + detail' if insert_beats else ''}")
 
-    # --- Cost: Seedance source clips + lip-sync re-dub + TTS + sound + images ------------
-    # Seedance bills per second (audio ON for spoken scenes, HALF for silent detail inserts).
-    # The re-dub adds Sync 2.0 (dialogue, per second) + LatentSync (narration, flat per clip),
-    # and ElevenLabs TTS bills per character. See costs.py for each rate.
-    video_rate, detail_rate = costs.seedance_rates()
-    video_cost = video_seconds * video_rate
-    detail_video_cost = detail_video_seconds * detail_rate
-    sync_cost = sync_seconds * costs.SYNC_LIPSYNC2_PER_SEC
-    latentsync_cost = latentsync_clips * costs.LATENTSYNC_FLAT
+    # --- Cost: SILENT Seedance clips + the lead's voiceover TTS + sound + images ---------
+    # Every scene clip is now SILENT (no audio = the cheaper $0.026/s rate), and the ONLY
+    # voice is the lead's voiceover (ElevenLabs TTS, per character). No lip-sync models at
+    # all, so no Sync 2.0 / LatentSync line any more.
+    _, silent_rate = costs.seedance_rates()
+    scene_cost = scene_video_seconds * silent_rate
+    detail_cost = detail_video_seconds * silent_rate
     tts_cost = tts_chars / 1000 * costs.ELEVEN_TTS_PER_1K_CHARS
     sfx_cost = ambient_seconds * costs.ELEVEN_SFX_PER_SEC                   # ambient beds + music
     image_cost = scene_images * costs.NANO_BANANA_PRO_EDIT_PER_IMAGE
-    clip_cost = (video_cost + detail_video_cost + sync_cost + latentsync_cost
-                 + tts_cost + sfx_cost + image_cost)
+    clip_cost = scene_cost + detail_cost + tts_cost + sfx_cost + image_cost
     costs.record(data, "clips",
-                 f"Scenes - Seedance 1.5 pro ({video_seconds:.0f}s) + detail inserts "
-                 f"({detail_video_seconds:.0f}s silent) + re-dub (Sync {sync_seconds:.0f}s + "
-                 f"{latentsync_clips} LatentSync) + TTS ({tts_chars} chars) + "
+                 f"Scenes - Seedance SILENT ({scene_video_seconds:.0f}s) + detail inserts "
+                 f"({detail_video_seconds:.0f}s) + VO TTS ({tts_chars} chars) + "
                  f"{scene_images} images + {ambient_seconds:.0f}s sound",
                  clip_cost)
 
@@ -1342,9 +1303,8 @@ def main():
     n_inserts = sum(1 for v in detail_by_loc.values() if v)
     print(f"\nUpdated output/analysis.json with the scene beats. "
           f"({scene_images} images, {len(ambient_by_loc)} ambient beds, {n_inserts} detail inserts)")
-    costs.show(f"{len(scenes)} scenes (Seedance {video_seconds:.0f}s + re-dub: Sync "
-               f"{sync_seconds:.0f}s + {latentsync_clips} LatentSync + {tts_chars} TTS chars "
-               f"+ {scene_images} images + sound)", clip_cost)
+    costs.show(f"{len(scenes)} scenes (Seedance silent {scene_video_seconds:.0f}s + VO "
+               f"{tts_chars} TTS chars + {scene_images} images + sound)", clip_cost)
 
 
 if __name__ == "__main__":
