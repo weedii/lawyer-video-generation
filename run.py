@@ -19,6 +19,7 @@ Each sub-script prints its own result and cost.
 import sys
 import os
 import json
+import time
 import subprocess
 import costs
 
@@ -39,6 +40,9 @@ if __name__ == "__main__":
         sys.exit('Usage: python run.py "<story-url>"')
 
     url = sys.argv[1]
+
+    # Start the clock so we can report how long the WHOLE run took (all 7 steps).
+    run_start = time.time()
 
     # The steps, in order. scrape needs the link; the others read files.
     step("STEP 1/7", "Scrape the story", ["scrape.py", url])
@@ -68,3 +72,6 @@ if __name__ == "__main__":
                 costs.print_summary(json.load(f))
         except Exception as e:
             print(f"(could not print cost summary: {e})", flush=True)
+
+    # How long the whole run took, printed AFTER the cost table.
+    print(f"\nTotal run time:   {costs.fmt_duration(time.time() - run_start)}", flush=True)

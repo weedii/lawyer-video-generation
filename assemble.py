@@ -36,6 +36,7 @@ import re
 import sys
 import json
 import subprocess
+import costs
 
 OUT_DIR = "output"
 FINAL = os.path.join(OUT_DIR, "final_video.mp4")
@@ -677,6 +678,7 @@ def main():
 
     print(f"\nDONE -> {FINAL}")
     print("Watch it: open output/final_video.mp4")
+    print(f" TIME: {costs.fmt_duration(costs.elapsed())}")
 
 
 if __name__ == "__main__":

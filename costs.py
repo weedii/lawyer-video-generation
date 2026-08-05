@@ -160,8 +160,31 @@ OPENAI_INPUT_PER_1M = 2.00    # $ per 1,000,000 input tokens
 OPENAI_OUTPUT_PER_1M = 8.00   # $ per 1,000,000 output tokens
 
 
+# When this module is first imported (at the very top of every script) we stamp the
+# start time. Because each script imports costs before doing any work, this is
+# effectively the script's start, so show() can report how long that script took.
+import time as _time
+_START = _time.time()
+
+
+def fmt_duration(secs: float) -> str:
+    """Turn seconds into a short human string, e.g. '3m 07s' or '1h 04m 09s'."""
+    secs = int(round(secs))
+    h, rem = divmod(secs, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}h {m:02d}m {s:02d}s" if h else f"{m}m {s:02d}s"
+
+
+def elapsed() -> float:
+    """Seconds since this script started (since costs was imported)."""
+    return _time.time() - _START
+
+
 def show(label: str, amount: float):
-    print(f"\n COST: {label} = ${amount:.4f}\n")
+    """Print a step's cost AND how long the step took (so each script, run on its own,
+    reports its own run time right under its cost)."""
+    print(f"\n COST: {label} = ${amount:.4f}")
+    print(f" TIME: {fmt_duration(elapsed())}\n")
 
 
 # --- Per-video cost summary -------------------------------------------------
