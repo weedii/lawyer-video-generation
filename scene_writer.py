@@ -1,28 +1,30 @@
-"""STAGE 2 - STEP 1: Write the SCENE script for the microdrama (scene-based).
+"""STAGE 2 - STEP 1: Write the SCENE script for the microdrama (memoir VOICEOVER).
 
-The unit is a SCENE, not a single line. Each scene is one continuous Seedance shot
-where the characters ACT and talk TO EACH OTHER — like a real short film —
-instead of one avatar talking to camera per line.
+The whole video is told by ONE narrator — the protagonist — in the first person,
+over cinematic footage (Goodfellas / House of Cards style). Every scene carries a
+"narration" line, and that voiceover is the ONLY voice the viewer hears. On-screen
+characters are SEEN acting but never HEARD (no synced dialogue, no lip-sync).
 
 It reads the analyzed story + characters AND the raw scraped story, then writes
-6-8 scenes with a real arc, in a first-person MEMOIR style:
-  - a NARRATION hook to open — the PROTAGONIST, alone and doing something in a
-    fitting place, tells us in first person how it began (looking at camera),
-  - DIALOGUE scenes that dramatize the REAL events (two people in one room, never
-    facing the camera),
-  - optional NARRATION "bridge" beats (the protagonist again) between them,
+6-8 scenes with a real arc:
+  - a NARRATION hook to open — the protagonist alone in a fitting place, telling us
+    how it began (contemplative, mouth closed; we hear their inner voice),
+  - "dialogue" scenes that dramatize the REAL events (people acting + silently
+    mouthing lines in one room) with the protagonist's voiceover OVER them,
+  - NARRATION "bridge" beats between them,
   - a NARRATION cliffhanger to close.
-The protagonist is BOTH narrator and actor: every narration beat is the same lead
-performing to camera, so downstream it uses that character's face + cloned voice.
+The narration is written in plain, simple English (only the legal jargon is kept),
+and it OWNS orientation — it names every new place and introduces every new person,
+because there are no establishing shots.
 
 Usage:
     python scene_writer.py
 
 Reads:  output/analysis.json   (characters + summary, from analyze.py)
-        output/scraped.json     (the raw story facts, so dialogue is specific)
+        output/scraped.json     (the raw story facts, so the story is specific)
 Output: adds a "script" section (with "scenes") INTO output/analysis.json
         and appends it to output/analysis.md so you can read it.
-Cost:   ~$0.001 (cheap OpenAI model).
+Cost:   ~$0.03 (OpenAI GPT-4.1).
 """
 import os
 import sys
@@ -134,6 +136,24 @@ VOICEOVER CARRIES EVERY SCENE (this is the core of the format):
 - Still write the on-screen "dialogue" for the dialogue scenes: it is what the actors
   silently mouth so the scene feels alive. Keep it short and real, but remember the
   viewer never hears it — the voiceover does the storytelling.
+- ORIENTATION IS THE NARRATOR'S JOB — do this EVERY time, no exceptions. There are NO
+  establishing shots and NO detail cutaways to lean on; the voiceover (plus a small
+  on-screen place card) is the ONLY thing that tells the viewer WHERE we are and WHO
+  someone is. So the "narration" must carry the orientation itself:
+    * NEW PLACE: whenever a scene is in a different location from the scene before it, that
+      scene's "narration" MUST name or clearly signal the new place, in the memoir voice
+      (e.g. "Up in the Real Estate group, the rules were simple…", "They dragged me into the
+      partner's office…").
+    * NEW PERSON: the FIRST time a character appears on screen, the "narration" of that SAME
+      scene (or the scene just before it) MUST name them and say who they are to the
+      protagonist (e.g. "Rachel, the senior associate, made it clear…", "That was when Priya
+      told me she was shipping out to Dubai."). One clear mention is enough.
+    * NEVER cut to a new place or a new face without the voiceover having introduced it in
+      that scene or the one right before. Treat this as a HARD checklist: for every scene,
+      if the place changed OR someone new is on screen, the narration must handle it.
+    * Keep it woven into the first-person memoir voice — never a stage direction ("in the
+      next scene", "we see", "cut to"). This is how the viewer stays oriented with no
+      establishing shots at all.
 
 INTRODUCE NEW FACES (so the viewer is never confused):
 - PRE-NAME every important character BEFORE their face first appears. In the scene (or

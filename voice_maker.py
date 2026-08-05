@@ -1,20 +1,23 @@
-"""STAGE 2 - STEP 2: Assign a fixed voice to every character (Seedance + our-voice pipeline).
+"""STAGE 2 - STEP 2: Assign voices (memoir VOICEOVER pipeline).
 
-The scene clips are made by Seedance (which invents its own voice per clip) and then
-RE-VOICED into OUR voice with ElevenLabs Speech-to-Speech (in scene_clips.py).
-For that we just need to decide, ONCE, which ElevenLabs voice each character owns
-— the same voice every time, so a character sounds identical across the whole
-film. This step does only that: it writes c["voice_id"] onto each speaking
-character (and the narrating protagonist) in analysis.json.
+In the voiceover style only ONE voice is ever heard: the NARRATOR (the lead). This
+step gives the narrator a voice and assigns the other characters a voice_id too
+(harmless — they're never heard, since there's no on-screen dialogue).
 
-No audio is generated here and nothing is cloned, so this step is effectively
-free; the real voice cost (the Speech-to-Speech swap) is billed in scene_clips.py.
+The narrator voice is picked at RANDOM for each video, from the whole ElevenLabs
+account, matched to the lead's gender — so the channel doesn't sound like the same
+person every time (NARRATOR_RANDOM). Set NARRATOR_RANDOM = False and NARRATOR_VOICE
+to a fixed ID to pin one instead.
+
+No audio is generated here (scene_clips.py does the TTS voiceover), so this step is
+effectively free — it only listens to the account's voice list and writes voice_ids.
 
 Usage:
     python voice_maker.py
 
 Reads:  output/analysis.json   (needs the "script" section from scene_writer.py)
-Output: writes c["voice_id"] (ElevenLabs) onto each speaking character.
+Output: writes c["voice_id"] (ElevenLabs) onto each character; the narrator gets a
+        random gender-matched voice.
 Cost:   free (voice IDs only).
 """
 import os

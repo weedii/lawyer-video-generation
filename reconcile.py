@@ -31,12 +31,11 @@ Other services:
 Anything billed that we can't map to a verified price is listed as UNVERIFIED
 instead of being guessed — so nothing is ever estimated silently.
 
-NOTE: the re-dub lip-sync models (fal-ai/sync-lipsync/v2 for dialogue,
-fal-ai/latentsync for narration) are NOT in the price table yet — their fal
-billable-UNIT is not confirmed against a real header, so they will appear under
-UNVERIFIED with their true unit counts. costs.py already estimates them per run
-($0.05/s Sync 2.0, $0.20/clip LatentSync); once a real header is seen here, add
-them to PRICES with the exact per-unit rate.
+NOTE: the CURRENT pipeline is memoir voiceover — every Seedance clip is SILENT and
+there is NO lip-sync, so all Seedance jobs price at the no-audio rate and the old
+re-dub models (fal-ai/sync-lipsync/v2, fal-ai/latentsync) no longer appear. If you
+re-enable that legacy path and see them show up as UNVERIFIED, add their real
+per-unit rate to PRICES from a live x-fal-billable-units header.
 
 Usage:
     python reconcile.py

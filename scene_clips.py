@@ -68,19 +68,18 @@ OUT_DIR = "output"
 VIDEO_MODEL = "fal-ai/bytedance/seedance/v1.5/pro/image-to-video"
 SCENE_EDIT_MODEL = "fal-ai/nano-banana-pro/edit"  # compose chars into one shot
 IMAGE_MODEL = "fal-ai/nano-banana-pro"            # text-to-image (detail with no room ref)
-# We do NOT trust Seedance's own spoken words (its native TTS mis-reads words and freezes
-# mid-sentence). Instead we make the CORRECT words ourselves with ElevenLabs text-to-speech,
-# then RE-DUB the Seedance clip's mouths onto that audio with a lip-sync model. Sync 2.0 has
-# active-speaker detection (maps each voice to the right of two faces) so it drives DIALOGUE
-# (2 faces); LatentSync is cheaper and drives NARRATION (1 face). Seedance still renders WITH
-# audio so the mouths are already moving — lip-sync needs a talking source, not a still face.
-TTS_MODEL = "eleven_multilingual_v2"                # ElevenLabs text-to-speech (correct words)
+# The narrator VOICEOVER: we make the words ourselves with ElevenLabs text-to-speech and lay
+# them OVER the silent clip (no lip-sync — the characters are never heard). This is the only
+# voice in the video.
+TTS_MODEL = "eleven_multilingual_v2"                # ElevenLabs text-to-speech (the voiceover)
 # Voice settings tuned for CLARITY — the narration is the ONLY voice in the video and it's
 # watched while scrolling, so it must be easy to catch. Steady (higher stability) so words
 # don't slur, and a touch slower (speed 0.95) so each line lands.
 VOICE_SETTINGS = {"stability": 0.55, "similarity_boost": 0.75, "style": 0.0, "speed": 0.95}
-SYNC_MODEL = "fal-ai/sync-lipsync/v2"              # dialogue re-dub: 2-face active-speaker sync
-LATENTSYNC_MODEL = "fal-ai/latentsync"            # narration re-dub: single-face, cheaper
+# LEGACY (unused): the old on-screen-dialogue path re-dubbed Seedance mouths onto our audio
+# with these lip-sync models. The voiceover style dropped all lip-sync; kept for reference.
+SYNC_MODEL = "fal-ai/sync-lipsync/v2"              # legacy: 2-face active-speaker sync
+LATENTSYNC_MODEL = "fal-ai/latentsync"            # legacy: single-face sync
 # 720p is Seedance's balanced tier and the price we budgeted ($0.052/s with audio); the
 # editor upscales the final cut to 1080x1920. Seedance IGNORES the input image's shape
 # and defaults to 16:9 landscape, so aspect_ratio="9:16" MUST be sent on every call
@@ -96,10 +95,10 @@ VIDEO_ASPECT = "9:16"
 STYLE = ("shot on 35mm film, muted teal-and-amber palette, soft cinematic grain, "
          "shallow depth of field, moody prestige legal-drama lighting, photorealistic")
 
-# DRAFT mode (run with DRAFT=1 in the environment) renders cheap for iteration: no audio
-# and the shortest clip length, so you can check framing, identity and motion without
-# paying for the audio pass or full duration. A real run leaves it off, so we get native
-# voices + lip-sync at full length.
+# DRAFT mode (run with DRAFT=1 in the environment) renders cheap for iteration: the shortest
+# clip length and no voiceover, so you can check framing, identity and motion without paying
+# for full-length clips or the TTS. A real run leaves it off, so each scene gets its full-length
+# silent clip with the narrator's voiceover laid over it.
 DRAFT = os.getenv("DRAFT") == "1"
 
 # --- Coverage + reactions (DISABLED — see note) -----------------------------
@@ -124,7 +123,13 @@ REACTION_DUR = "5s"       # Seedance's shortest safe length; the editor caps sil
 # and because it has no faces nothing can drift. One Nano image ($0.15) + one 4s silent
 # Seedance clip ($0.40) per location, cached so we pay once per place. This is real footage,
 # not a frozen still — that is why the old still-zoom establishing beat was removed.
-DETAIL_INSERTS = True
+# DISABLED for now (set back to True to re-enable). In the narration style the VOICEOVER
+# already introduces every new place and person (and the location cards label the place on
+# screen), so the detail inserts became a redundant fourth cue — they mostly added visual
+# variety, not orientation. Turning them off saves ~$1.40 per video (5 Nano images + 5 silent
+# Seedance clips on a typical run) and makes the cut tighter. Kept in the code (make_detail_insert,
+# compose_detail_image, detail_insert_prompt below) so they can be switched on again later.
+DETAIL_INSERTS = False
 DETAIL_DUR = "5s"         # Seedance's shortest safe length; the editor trims it to a ~1.2s glance
 
 
@@ -554,11 +559,11 @@ def _submit_and_collect(model: str, arguments: dict, out_path: str, label: str) 
 
 def make_video_clip(image_path: str, prompt: str, duration: str, out_path: str,
                     generate_audio: bool = True) -> float:
-    """Render one Seedance 1.5 pro clip from the start image. SPOKEN scenes keep
-    generate_audio=True so the mouths are already MOVING (the lip-sync re-dub needs a talking
-    source, not a still face); SILENT detail inserts pass generate_audio=False (half price)
-    and then get a silent stereo track. Returns the billed seconds, or 0.0 (no file) on
-    failure so one bad beat never crashes the run."""
+    """Render one Seedance 1.5 pro clip from the start image. The voiceover pipeline always
+    calls this with generate_audio=False (SILENT — half price, and we never hear the
+    characters); the clip then gets a silent stereo track and the narrator's voiceover is
+    laid over it later. (generate_audio=True is legacy, for the old lip-sync path.) Returns
+    the billed seconds, or 0.0 (no file) on failure so one bad beat never crashes the run."""
     secs = float(int(duration[:-1]))
     # Seedance takes the duration as a bare number ("5", not "5s") and IGNORES the image
     # aspect unless aspect_ratio is sent. Ordering is deliberate: the cost logger truncates
@@ -939,14 +944,12 @@ def _reply_cue(c: dict) -> str:
 
 
 def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
-    """Prompt for a WHOLE dialogue scene as ONE continuous Seedance clip. We RE-DUB the audio
-    afterwards (ElevenLabs voices + Sync 2.0), so the model's spoken WORDS do not matter —
-    what we need is smooth talking MOTION in the right TURN ORDER (speaker A, then B, ...),
-    with NO mid-sentence freeze. The freeze in the old version came from an explicit per-line
-    TIMELINE that forced the model to hit clock times; it would pause to fit them, and the
-    lip-sync then left the mouth shut over our continuous voice. So the turns are now natural
-    stage directions, not timed windows. The locked camera, identity locks and anti-clone
-    rules that hold the faces are kept."""
+    """Prompt for a WHOLE dialogue scene as ONE continuous Seedance clip. The clip is rendered
+    SILENT and the narrator's voiceover is laid over it — the characters are never heard — so
+    the model's spoken WORDS do not matter at all. What we need is believable acting: the cast
+    naturally mouthing an exchange in the right TURN ORDER (A, then B, ...) so the scene looks
+    alive under the voiceover. The locked camera, identity locks and anti-clone rules that hold
+    the faces are kept."""
     lines = sc.get("dialogue", [])
     speakers = sc.get("characters", [])
     # Everyone in the frame, not just the talkers: the silent people are composed into

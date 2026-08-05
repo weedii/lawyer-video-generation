@@ -1,26 +1,20 @@
-"""Model prices — VERIFIED from official sources (checked June 2026), not guessed.
-Every script prints its cost using these so we always know what we spent.
+"""Model prices — VERIFIED from official sources, not guessed. Every script prints its
+cost (and run time) using these, so we always know what we spent.
 
-Sources (fal.ai official model pages + docs, checked 2026-06):
-- Nano Banana Pro:  $0.15 / image (2K standard; 4K = double)
-    fal.ai/models/fal-ai/nano-banana-pro
-- FLUX.1 [dev]:     $0.025 / megapixel (rounded up to nearest MP)
-    fal.ai/models/fal-ai/flux/dev
-- FLUX.1 [schnell]: $0.003 / megapixel (rounded up)
-    fal.ai/models/fal-ai/flux/schnell
-- Sana:             $0.001 / megapixel
-    fal.ai/models/fal-ai/sana
-- fast-sdxl:        $0.00111 / compute-second (so price varies with run time)
-    gist.github.com/azer/6e8ffa228cb5d6f5807cd4d895b191a4
-- VEED Fabric 1.0 (DEFAULT talker): $0.08/sec (480p), $0.15/sec (720p). No padding.
-    fal.ai/models/veed/fabric-1.0
-- Kling AI Avatar v2 standard: $0.0562 / second of OUTPUT video (pads to ~7.2s)
-    fal.ai/models/fal-ai/kling-video/ai-avatar/v2/standard
-- OmniHuman 1.5:    $0.16 / second of output video
-    fal.ai/models/fal-ai/bytedance/omnihuman/v1.5
-- Seedance 1.5 Pro (SCENE model): $0.052/sec with audio, $0.026/sec without
+CURRENT PIPELINE (memoir voiceover) uses only:
+- Nano Banana Pro (portraits + scene composites):  $0.15 / 2K image
+    fal.ai/models/fal-ai/nano-banana-pro (+ /edit)
+- Seedance 1.5 Pro image-to-video, SILENT tier:    $0.026 / sec
     fal.ai/models/fal-ai/bytedance/seedance/v1.5/pro/image-to-video
-- ElevenLabs and OpenAI bill on SEPARATE accounts (NOT fal).
+- ElevenLabs Text-to-Speech (narrator voiceover):  $0.10 / 1,000 chars
+- ElevenLabs sound-generation (ambience + music):  ~$0.002 / sec
+- OpenAI GPT-4.1 (analysis + script):              per-token (openai_cost)
+  (ElevenLabs and OpenAI bill on SEPARATE accounts, NOT fal.)
+
+Everything else below (FLUX, Sana, VEED Fabric, Kling, OmniHuman, Sync 2.0,
+LatentSync, Speech-to-Speech) is LEGACY — from approaches we tried and dropped
+(on-screen dialogue + lip-sync). Kept for reference / possible reuse; not used by
+the current pipeline. See CLAUDE.md "History".
 """
 
 # Our generated images are 720x1280 = 0.88 MP, which fal ROUNDS UP to 1 MP.

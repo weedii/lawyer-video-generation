@@ -4,14 +4,16 @@ This is where the separately-generated clips become one smooth short film. The
 research was blunt: what makes AI drama look pro is NOT the clips, it's the
 connective tissue BETWEEN them. So this step does real editing craft:
 
-  1. Per BEAT (one clip = one beat, e.g. one spoken line): trim the dead
-     "staring" lead-in image-to-video clips tend to open with (adaptive
-     speech-onset), so there are no dead pauses before someone talks.
+  1. Per BEAT (one clip = one beat = one scene): trim any dead "staring" lead-in
+     image-to-video clips tend to open with (adaptive speech-onset). Scenes carry the
+     narrator's voiceover from the top, so they read as "already talking" and are left
+     whole; this mostly matters for the old formats.
   2. Give every clip ONE colour look (a gentle shared grade, + an optional LUT)
      so clips generated independently stop looking like different cameras.
-  3. Lay a CONTINUOUS ambient bed (room tone) per location + optional music UNDER
-     the whole thing, so the audio never drops to silence at a cut — the single
-     biggest trick for hiding the seams. The picture cuts; the sound does not.
+  3. Lay a CONTINUOUS per-location ambience bed + ducked music UNDER the whole thing
+     (both generated upstream by scene_clips.py), so the audio never drops to silence
+     at a cut — the single biggest trick for hiding the seams. The picture cuts; the
+     sound does not. Location cards label each new place.
   4. Join the picture with a gentle breathing zoom and tiny edge fades.
 
 Quality first: we render at the biggest clip's size (no downscaling) at near-
@@ -39,7 +41,12 @@ import subprocess
 import costs
 
 OUT_DIR = "output"
-FINAL = os.path.join(OUT_DIR, "final_video.mp4")
+# Test toggle: NO_INSERTS=1 rebuilds the video WITHOUT the detail-insert beats (to see
+# whether the narration + location cards alone keep the viewer oriented). It writes a
+# SEPARATE file so the normal final_video.mp4 is never clobbered, and it needs no new
+# generation — it just re-joins the clips already on disk.
+SKIP_INSERTS = os.getenv("NO_INSERTS") == "1"
+FINAL = os.path.join(OUT_DIR, "final_video_no_inserts.mp4" if SKIP_INSERTS else "final_video.mp4")
 MUSIC = os.path.join(OUT_DIR, "music.mp3")
 LOOK_LUT = os.path.join(OUT_DIR, "look.cube")   # optional creative grade (a .cube LUT)
 
@@ -400,6 +407,8 @@ def collect_beats(scenes: list) -> list:
             sc_beats = [{"file": sc["clip"], "kind": sc.get("type", "line"),
                          "silent": False}]
         for b in (sc_beats or []):
+            if SKIP_INSERTS and b.get("kind") == "insert":
+                continue          # NO_INSERTS test: drop the detail-insert beats
             p = os.path.join(OUT_DIR, b.get("file", ""))
             if b.get("file") and os.path.exists(p):
                 beats.append({

@@ -13,37 +13,37 @@ shows like *Suits*, *Billions*, and *The Good Wife*.
 
 ## What it does: Link → Final video
 
-Give it a story link and it automatically produces a finished vertical
-microdrama as a **first-person short film**: the **main character narrates his
-own story straight to camera** (opening hook, mid bridges, cliffhanger — alone,
-doing something, in his own voice), intercut with **cinematic scenes where the
-characters act and talk TO EACH OTHER in the same room**. Cost: **about $12–15
-per video.**
+Give it a story link and it automatically produces a finished vertical microdrama
+in **memoir voiceover** style: **one narrator (the main character) tells the whole
+story in the first person** over cinematic footage — like Goodfellas or House of
+Cards. The other characters are **seen acting** in their scenes but are **never
+heard**; there is no synced dialogue and no lip-sync (that's what makes it reliable
+and cheap). The narrator's voiceover, small on-screen location cards, per-location
+background ambience and ducked music carry it. Cost: **about $3–5 per video.**
 
 ### Run it
 ```bash
 python run.py "https://www.rollonfriday.com/news-content/some-story"
 ```
 
-`run.py` is the manager. It runs seven steps in order:
+`run.py` is the manager. It runs seven steps in order (and prints each step's cost
+and time, plus a total at the end):
 
 | Step | Script | What it does | Model | Cost |
 |------|--------|--------------|-------|------|
 | 1 | `scrape.py <url>` | Download story + comments | — | free |
 | 2 | `analyze.py` | Organize + invent fictional characters | OpenAI GPT-4.1 | ~$0.03 |
-| 3 | `gen_characters.py` | One locked vertical portrait per character (used as scene reference) | fal.ai Nano Banana Pro (2K) | $0.15 each |
-| 4 | `scene_writer.py` | Write the SCENE script (5–7 scenes; each dialogue scene = 2 characters in one room) | OpenAI GPT-4.1 | ~$0.04 |
-| 5 | `voice_maker.py` | Assign each character a fixed ElevenLabs voice_id (free; the swap is billed in step 6) | ElevenLabs voice IDs | free |
-| 6 | `scene_clips.py` | Compose the characters into one shot, render one Seedance clip per scene (two people acting + talking, native lip-sync), then swap the narrator into our own voice keeping the timing | Nano Banana Pro + Seedance 1.5 pro + ElevenLabs Speech-to-Speech | ~$0.052/sec Seedance |
-| 7 | `assemble.py` | Join the scenes into the final video | ffmpeg (local) | free |
+| 3 | `scene_writer.py` | Write the scene script (6–8 scenes; a first-person voiceover over each) | OpenAI GPT-4.1 | ~$0.03 |
+| 4 | `gen_characters.py` | One locked vertical portrait per USED character (scene reference) | fal.ai Nano Banana Pro (2K) | $0.15 each |
+| 5 | `voice_maker.py` | Give the narrator a random voice for this video (others don't matter — never heard) | ElevenLabs voice IDs | free |
+| 6 | `scene_clips.py` | Compose each scene image, render one **silent** Seedance clip, lay the narrator's voiceover + ambience over it (no lip-sync) | Nano Banana Pro + Seedance 1.5 pro (silent) + ElevenLabs TTS | ~$0.026/sec Seedance + $0.15/image |
+| 7 | `assemble.py` | Join the clips + ambience + ducked music + location cards | ffmpeg (local) | free |
 
 ### Results (in `output/`)
 - `final_video.mp4` — the finished vertical microdrama
 - `analysis.md` — easy-to-read story + characters + script
 - `analysis.json` — everything together (story, characters, script, files)
-- `char_*.png`, `voice_*.mp3`, `clip_*.mp4` — the building pieces
-
-Optional: drop an `output/music.mp3` and the final video gets background music.
+- `char_*.png`, `scene_*.png`, `clip_*.mp4`, `amb_*.mp3`, `music.mp3` — the building pieces
 
 ### How names are kept fictional (reliably)
 `analyze.py` uses a guardrail instead of just "asking nicely":
@@ -74,10 +74,10 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 ```
 
 ## Files
-- `run.py` — manager (runs the whole link → final video pipeline)
+- `run.py` — manager (runs the whole link → final video pipeline; prints cost + time)
 - `scrape.py`, `analyze.py`, `gen_characters.py` — story → characters + portraits
-- `scene_writer.py`, `voice_maker.py`, `scene_clips.py`, `assemble.py` — scenes → cloned voices → scene clips → video
-- `costs.py` — price list; every script prints its cost
+- `scene_writer.py`, `voice_maker.py`, `scene_clips.py`, `assemble.py` — script → narrator voice → scene clips → video
+- `costs.py` — price list + per-step cost/time printer
 - `costlog.py`, `reconcile.py`, `sitecustomize.py` — cost spy: with `COSTLOG=1` set, log every API call and compute the REAL cost from actual billed units
 - `requirements.txt` — the Python libraries to install
 - `.env` — API keys (ignored by git)
@@ -86,39 +86,39 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 
 ## Rules learned
 - Everything is **vertical 9:16** (TikTok). Wide video stretches the character.
-- The unit is a **SCENE, not a line.** Old avatar-per-line clips felt like each
-  character was alone in a separate room. A real short film needs one shot with
-  **both characters interacting** — so we generate scenes, not talking heads.
-- **Character consistency across scenes:** keep one locked portrait per character
-  (Nano Banana Pro), then feed those portraits as **references** when composing
-  each scene image, so faces stay the same.
-- **Voice consistency across scenes:** each character owns one fixed ElevenLabs
-  voice. Seedance invents a new voice per clip, so the recurring narrator's clip
-  audio is swapped into their locked voice with **Speech-to-Speech** (which keeps
-  the timing, so the lip-sync still matches). Dialogue clips keep Seedance's own
-  native voices (splitting two speakers to swap both is a later upgrade).
-- A dialogue scene may have **at most 2 speaking characters** (the whole scene is
-  one ~8s clip and each line needs its own time window); the scene writer enforces this.
-- **ElevenLabs v3 clips the final word** — fix: append a trailing `—` so the cut
-  lands on the dash, then trim the leftover silence (`voice_maker.py`).
+- **Memoir voiceover, not on-screen dialogue.** One narrator tells the whole story;
+  characters are seen acting but never heard. Cheap AI can't reliably lip-sync
+  multi-character dialogue, so we don't try — the voiceover does the storytelling.
+- **One voice per video, picked at random** from the ElevenLabs account (gender-matched
+  to the lead), so the channel varies video to video. Only the narrator is heard.
+- **Simple English narration**, keeping only the real legal terms (the jargon is the
+  hook), so it's understood while scrolling.
+- **Orientation is the narrator's job:** the voiceover names each new place and person as
+  we arrive, backed by on-screen location cards — so no establishing shots are needed
+  (detail inserts are disabled by default).
+- **Character consistency:** one locked Nano Banana portrait per character, fed as a
+  reference when composing each scene image, plus a per-location room anchor.
+- **Per-location ambience** (party chatter, train rumble) runs continuously under each
+  scene, below the voice; music runs unbroken and is ducked under the narration.
 - Nano Banana can compose a wide room **sideways** to fit 9:16 — compose the room
-  **vertically** (people in front, room rising behind/above) and check it came
-  out upright.
+  **vertically** (people in front, room rising behind/above) and check it came out upright.
+- **ElevenLabs clips the final word** — fix: append a trailing `—` so the cut lands on the
+  dash, then trim the leftover silence.
 
 ## Costs (estimates from provider pricing)
 - Scrape: free
-- Analyze + scene script (OpenAI GPT-4.1): ~$0.07 per story
+- Analyze + scene script (OpenAI GPT-4.1): ~$0.06 per story
 - Character portrait (Nano Banana Pro, 2K): $0.15 each
-- Voice: each character keeps one fixed ElevenLabs voice; the narrator's clip audio is swapped into it with Speech-to-Speech (~$0.002/sec of audio)
 - Composed scene image (Nano Banana Pro): $0.15 per scene
-- Scene clip — Seedance 1.5 pro (two people acting + talking, native lip-sync): $0.052 per second with audio ($0.026 for silent detail inserts); the narrator clip is then swapped into our voice (~$0.002/sec)
-- **Roughly $3–5 for one finished ~75s video** (Seedance replaced the far dearer Veo, which also blocked our AI faces)
+- Scene clip — Seedance 1.5 pro **silent**: $0.026 per second
+- Narrator voiceover (ElevenLabs TTS): $0.10 / 1,000 characters; ambience + music (sound-generation): ~$0.002/sec
+- **Roughly $3–5 for one finished ~75s video.** The Nano images (portraits + scene composites) are the biggest chunk, not the video model.
 
 ---
 
 ## Next improvements
-- Background music (drop `output/music.mp3`).
-- Editing variety: reaction shots, B-roll, zoom-ins between lines.
+- Editing variety: reaction beats, zoom-ins, better music, optional detail inserts back on.
+- Cheaper/faster: fewer Nano images (cap cast, reuse composites); parallelize the clip renders.
 
 ## Final vision (later)
 Fully automated pipeline: scrape sources → score stories (good vs. bad) →
