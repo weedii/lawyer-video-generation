@@ -74,7 +74,8 @@ BASE_GRADE = "eq=contrast=1.06:saturation=1.05:gamma=0.98"
 # --- Continuous sound bed ---------------------------------------------------
 # The ambient bed (room tone) and music run UNBROKEN under the whole video, mixed
 # low, so the soundtrack never cuts even though the picture cuts every few seconds.
-BED_VOL = 0.07       # ambient room-tone: felt, not heard — sits well under the dialogue
+BED_VOL = 0.18       # location ambience (party chatter, train rumble): HEARD the whole
+                     # scene, but sits gently under the narrator's voice
 MUSIC_VOL = 0.09     # background music: present, but clearly under the voices (which is
                      # the point) — the sidechain duck below drops it further under speech
 # The J-cut: how far the NEXT room's tone starts before the picture cuts to it. Editors

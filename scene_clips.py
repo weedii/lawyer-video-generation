@@ -695,15 +695,18 @@ def _mux_audio(video_path: str, audio_path: str, out_path: str) -> bool:
 # loop per unique location here (ElevenLabs Sound-Effects) and record it on each
 # scene; the editor loops it to length and mixes it low under the dialogue.
 
-def ambient_prompt(setting: str) -> str:
-    """A short prompt describing the CONTINUOUS background sound of a place (room
-    tone). Explicitly no music and no voices — just the steady bed of the room."""
-    s = (setting or "a quiet room").strip().rstrip(".")
-    return (f"Continuous quiet background room tone of {s}: subtle steady ambience, "
-            f"faint distant sounds, no music, no speech, no voices — a seamless loop.")
+def ambient_prompt(desc: str) -> str:
+    """A short prompt for the CONTINUOUS background sound of a place, built from the
+    scene's `ambience` description (e.g. 'low party chatter and clinking glasses', 'train
+    rumble on the rails'). Indistinct and loopable — no clear speech, no foreground music,
+    no one-off effects — so it sits UNDER the narration for the whole scene."""
+    s = (desc or "a quiet room").strip().rstrip(".")
+    return (f"Continuous background ambience: {s}. A steady, seamless bed that loops with "
+            f"no gaps, atmospheric and indistinct — no clear or intelligible speech, no "
+            f"foreground music, no sudden one-off effects.")
 
 
-def make_ambient(setting: str, out_path: str, seconds: int = 15) -> float:
+def make_ambient(desc: str, out_path: str, seconds: int = 15) -> float:
     """Generate ONE seamlessly-looping ambient bed for a location with the
     ElevenLabs Sound-Effects API (loop=true so it repeats with no click). Returns
     the generated seconds (for cost), or 0.0 on failure — in which case the scene
@@ -712,7 +715,7 @@ def make_ambient(setting: str, out_path: str, seconds: int = 15) -> float:
         r = requests.post(
             "https://api.elevenlabs.io/v1/sound-generation",
             headers={"xi-api-key": ELEVEN_KEY, "Content-Type": "application/json"},
-            json={"text": ambient_prompt(setting),
+            json={"text": ambient_prompt(desc),
                   "duration_seconds": seconds, "loop": True},
             timeout=120,
         )
@@ -753,63 +756,6 @@ def make_music(out_path: str, seconds: int = 22) -> float:
     except Exception as e:
         print(f"    music bed error ({e})")
         return 0.0
-
-
-# One punchy real-world SOUND per scene (a door slam, a phone buzz, a gavel crack),
-# suggested by the script per scene and generated here, then mixed a beat into the clip
-# UNDER the voiceover. This is what stops a narration-only video feeling flat — a real
-# event sound lands on the key moment. It is NOT the looping ambient bed (that is steady
-# room tone) and NOT music; it's a single short hit.
-SFX_SECONDS = 3            # a short one-shot; ElevenLabs needs a duration, 3s covers a hit
-SFX_VOL = 0.5              # loud enough to feel, clearly under the narration voice
-SFX_DELAY_MS = 300         # start it a beat into the clip, not on the very first frame
-
-
-def make_sfx(text: str, out_path: str, seconds: int = SFX_SECONDS) -> float:
-    """Generate ONE short one-shot sound effect from the scene's `sfx` description
-    (ElevenLabs Sound-Effects, loop=False). Returns the generated seconds (for cost),
-    or 0.0 on failure — in which case the scene simply gets no effect."""
-    text = (text or "").strip()
-    if not text:
-        return 0.0
-    try:
-        r = requests.post(
-            "https://api.elevenlabs.io/v1/sound-generation",
-            headers={"xi-api-key": ELEVEN_KEY, "Content-Type": "application/json"},
-            json={"text": text, "duration_seconds": seconds, "loop": False},
-            timeout=120,
-        )
-        if r.status_code != 200:
-            print(f"    sfx failed {r.status_code}: {r.text[:120]}")
-            return 0.0
-        with open(out_path, "wb") as f:
-            f.write(r.content)
-        return float(seconds)
-    except Exception as e:
-        print(f"    sfx error ({e})")
-        return 0.0
-
-
-def mix_sfx_into_clip(clip_path: str, sfx_path: str) -> bool:
-    """Mix the one-shot sound effect INTO a finished clip's audio, a beat in and under the
-    voiceover (normalize=0 so the narration stays at full level and the effect just adds on
-    top). Rewrites the clip in place. On any failure the clip is left untouched."""
-    tmp = clip_path + ".sfx.mp4"
-    fc = (f"[1:a]aresample=44100,aformat=channel_layouts=stereo,"
-          f"adelay={SFX_DELAY_MS}|{SFX_DELAY_MS},volume={SFX_VOL}[s];"
-          f"[0:a][s]amix=inputs=2:duration=first:normalize=0[a]")
-    try:
-        subprocess.run(["ffmpeg", "-y", "-i", clip_path, "-i", sfx_path,
-                        "-filter_complex", fc, "-map", "0:v", "-map", "[a]",
-                        "-c:v", "copy", "-c:a", "aac", "-ar", "44100", "-ac", "2", tmp],
-                       check=True, capture_output=True)
-        os.replace(tmp, clip_path)
-        return True
-    except Exception as e:
-        print(f"    (could not mix sfx in: {e}); leaving the clip without it")
-        if os.path.exists(tmp):
-            os.remove(tmp)
-        return False
 
 
 def extract_last_frame(clip_path: str, out_path: str) -> bool:
@@ -1204,7 +1150,10 @@ def main():
                 amb_file = amb_name
                 print(f"    (reusing ambient bed {amb_name} — already on disk, $0)")
             else:
-                secs = make_ambient(sc_setting, amb_path)
+                # Use the scene's ambience description (party chatter, train rumble) so the
+                # bed is characterful, not a generic hum. Falls back to the setting text.
+                amb_desc = (sc.get("ambience") or "").strip() or sc_setting
+                secs = make_ambient(amb_desc, amb_path)
                 amb_file = amb_name if secs > 0 else ""
                 ambient_seconds += secs
             ambient_by_loc[loc_key] = amb_file
@@ -1338,15 +1287,6 @@ def main():
         for f in (src, dub):
             if os.path.exists(f):
                 os.remove(f)
-        # Mix this scene's suggested sound effect into the clip (a beat in, under the VO),
-        # so the video has a real event sound on its key moment instead of flat narration.
-        sfx_text = (sc.get("sfx") or "").strip()
-        if sfx_text:
-            sfx_path = os.path.join(OUT_DIR, f"sfx_{i:02d}.mp3")
-            if not os.path.exists(sfx_path):
-                ambient_seconds += make_sfx(sfx_text, sfx_path)
-            if os.path.exists(sfx_path):
-                mix_sfx_into_clip(clip_path, sfx_path)
         sc["beats"] = insert_beats + [beat]
         print(f"  [{i}] {sc.get('type','scene').upper()} [{who}] -> {clip_name} "
               f"(silent {dur} + VO){' + detail' if insert_beats else ''}")
