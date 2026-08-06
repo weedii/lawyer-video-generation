@@ -57,8 +57,16 @@ SEEDANCE_AUDIO_PER_MTOK = 2.40     # $2.40 / MILLION tokens (720p WITH audio —
 SEEDANCE_NOAUDIO_PER_MTOK = 1.20   # $1.20 / MILLION tokens (720p no audio — silent inserts)
 
 PRICES = {
+    # Pro is the AUTOMATIC compose fallback: scene_clips tries non-pro first and retries a
+    # hard image on Pro when non-pro returns nothing, so a "non-pro" run can legitimately
+    # bill a few nano-banana-pro/edit images. Both tiers price correctly here because they
+    # are separate namespaces (a failed non-pro attempt bills $0 and never reaches results).
     "nano-banana-pro/edit": 0.15,   # $0.15 / composed image (2K)   (check /edit first)
     "nano-banana-pro": 0.15,        # $0.15 / portrait image (2K)
+    # Non-pro (CURRENT default) — MUST stay AFTER the -pro keys above, since "nano-banana"
+    # is a prefix of "nano-banana-pro" and full_model() takes the first matching prefix.
+    "nano-banana/edit": 0.039,      # $0.039 / composed image
+    "nano-banana": 0.039,           # $0.039 / portrait image
     "flux/dev": 0.025,              # $0.025 / image (1 MP)
     SEEDANCE_KEY: SEEDANCE_AUDIO_PER_MTOK,   # default rate; overridden per-call by audio flag
     "kling-video/create-voice": 0.007,       # $0.007 / generation

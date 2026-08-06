@@ -452,7 +452,12 @@ def build_ambient_bed(prepared: list, out_path: str) -> str:
     # which is exactly where a J-cut belongs. Same room, new people: no boundary, no
     # J-cut, correctly, because the room tone should not change if the room did not.
     runs = []          # list of [ambient_file, total_seconds]
-    for b in prepared:
+    for idx, b in enumerate(prepared):
+        # A beat with no room sound of its own BORROWS another room's bed (a fallback, free).
+        # Print it so every step is visible — you can see which beats had no ambience.
+        if not b.get("ambient") and fallback:
+            print(f"    [ambience fallback] beat {idx + 1} has no room sound; "
+                  f"borrowing {os.path.basename(fallback)} (free)")
         amb = b.get("ambient") or fallback
         if runs and runs[-1][0] == amb:
             runs[-1][1] += b["dur"]

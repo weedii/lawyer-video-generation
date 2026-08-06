@@ -2,8 +2,11 @@
 cost (and run time) using these, so we always know what we spent.
 
 CURRENT PIPELINE (memoir voiceover) uses only:
-- Nano Banana Pro (portraits + scene composites):  $0.15 / 2K image
-    fal.ai/models/fal-ai/nano-banana-pro (+ /edit)
+- Nano Banana (non-pro) (portraits + scene composites):  $0.039 / image
+    fal.ai/models/fal-ai/nano-banana (+ /edit)
+    (Nano Banana PRO, $0.15/2K, is the higher-quality option — see the Pro constants
+    below; a 7-model bake-off showed non-pro is the only cheaper model that still keeps
+    the exact cast with correct faces, so we run non-pro by default.)
 - Seedance 1.5 Pro image-to-video, SILENT tier:    $0.026 / sec
     fal.ai/models/fal-ai/bytedance/seedance/v1.5/pro/image-to-video
 - ElevenLabs Text-to-Speech (narrator voiceover):  $0.10 / 1,000 chars
@@ -22,14 +25,24 @@ the current pipeline. See CLAUDE.md "History".
 OUR_IMAGE_MEGAPIXELS = 1
 
 # --- Image models (fal) ---------------------------------------------------
-# Nano Banana Pro (character portraits): flat per image. We generate 2K, which
-# is the standard rate ($0.15). 4K would be double; we don't use 4K.
-NANO_BANANA_PRO_PER_IMAGE = 0.15
+# Nano Banana (non-pro) — OUR CURRENT image model, flat per image. Portraits
+# (gen_characters.py) and scene composites (scene_clips.py) both use it. ~4x cheaper
+# than Pro and, in a 7-model bake-off, the only cheaper model that kept the exact cast
+# with correct faces (Seedream / FLUX.2 / Qwen all invented or duplicated people).
+#     fal.ai/models/fal-ai/nano-banana (+ /edit)
+NANO_BANANA_PER_IMAGE = 0.039        # portraits (text-to-image)
+NANO_BANANA_EDIT_PER_IMAGE = 0.039   # scene composites (compose the cast into one shot)
 
-# Nano Banana Pro EDIT (compose 2 characters into one scene shot): same flat
-# per-image price as generate at 2K. Used by scene_clips.py.
-#     fal.ai/models/fal-ai/nano-banana-pro/edit
-NANO_BANANA_PRO_EDIT_PER_IMAGE = 0.15
+# Nano Banana PRO (higher quality, ~4x the price). Two uses:
+#   1) NANO_BANANA_PRO_EDIT_PER_IMAGE is the AUTOMATIC compose fallback — scene_clips.py
+#      tries non-pro first, and when non-pro returns no image on a hard 2-person shot it
+#      retries that ONE image on Pro. The per-video cost adds this price only for the
+#      composes that actually fell back (scene_clips counts them), so the printed cost is
+#      honest whether 0 or 3 scenes needed Pro.
+#   2) Manual quality option — flip the MODEL constants in gen_characters.py / scene_clips.py
+#      to the "-pro" ids if the non-pro portraits/faces ever look too soft.
+NANO_BANANA_PRO_PER_IMAGE = 0.15         # Pro portrait, 2K
+NANO_BANANA_PRO_EDIT_PER_IMAGE = 0.15    # Pro compose, 2K (also the auto compose-fallback price)
 
 # FLUX.1 [dev]: $0.025/MP -> $0.025 per image at our size. Used for the
 # establishing shot and (currently) the anonymous silhouettes.

@@ -19,7 +19,7 @@ story in the first person** over cinematic footage — like Goodfellas or House 
 Cards. The other characters are **seen acting** in their scenes but are **never
 heard**; there is no synced dialogue and no lip-sync (that's what makes it reliable
 and cheap). The narrator's voiceover, small on-screen location cards, per-location
-background ambience and ducked music carry it. Cost: **about $3–5 per video.**
+background ambience and ducked music carry it. Cost: **about $2 per video.**
 
 ### Run it
 ```bash
@@ -34,9 +34,9 @@ and time, plus a total at the end):
 | 1 | `scrape.py <url>` | Download story + comments | — | free |
 | 2 | `analyze.py` | Organize + invent fictional characters | OpenAI GPT-4.1 | ~$0.03 |
 | 3 | `scene_writer.py` | Write the scene script (6–8 scenes; a first-person voiceover over each) | OpenAI GPT-4.1 | ~$0.03 |
-| 4 | `gen_characters.py` | One locked vertical portrait per USED character (scene reference) | fal.ai Nano Banana Pro (2K) | $0.15 each |
+| 4 | `gen_characters.py` | One locked vertical portrait per USED character (scene reference) | fal.ai Nano Banana (non-pro) | $0.039 each |
 | 5 | `voice_maker.py` | Give the narrator a random voice for this video (others don't matter — never heard) | ElevenLabs voice IDs | free |
-| 6 | `scene_clips.py` | Compose each scene image, render one **silent** Seedance clip, lay the narrator's voiceover + ambience over it (no lip-sync) | Nano Banana Pro + Seedance 1.5 pro (silent) + ElevenLabs TTS | ~$0.026/sec Seedance + $0.15/image |
+| 6 | `scene_clips.py` | Compose each scene image, render one **silent** Seedance clip, lay the narrator's voiceover + ambience over it (no lip-sync) | Nano Banana (non-pro) + Seedance 1.5 pro (silent) + ElevenLabs TTS | ~$0.026/sec Seedance + $0.039/image |
 | 7 | `assemble.py` | Join the clips + ambience + ducked music + location cards | ffmpeg (local) | free |
 
 ### Results (in `output/`)
@@ -98,6 +98,9 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
   (detail inserts are disabled by default).
 - **Character consistency:** one locked Nano Banana portrait per character, fed as a
   reference when composing each scene image, plus a per-location room anchor.
+- **Auto Pro fallback on the scene image:** the cheap non-pro model sometimes returns no
+  image on a hard two-person shot, so we retry that one image on Nano Banana Pro. You only
+  pay Pro's higher price on the few scenes that need it, and the printed cost counts it.
 - **Per-location ambience** (party chatter, train rumble) runs continuously under each
   scene, below the voice; music runs unbroken and is ducked under the narration.
 - Nano Banana can compose a wide room **sideways** to fit 9:16 — compose the room
@@ -108,11 +111,11 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 ## Costs (estimates from provider pricing)
 - Scrape: free
 - Analyze + scene script (OpenAI GPT-4.1): ~$0.06 per story
-- Character portrait (Nano Banana Pro, 2K): $0.15 each
-- Composed scene image (Nano Banana Pro): $0.15 per scene
+- Character portrait (Nano Banana non-pro): $0.039 each
+- Composed scene image (Nano Banana non-pro): $0.039 per scene
 - Scene clip — Seedance 1.5 pro **silent**: $0.026 per second
 - Narrator voiceover (ElevenLabs TTS): $0.10 / 1,000 characters; ambience + music (sound-generation): ~$0.002/sec
-- **Roughly $3–5 for one finished ~75s video.** The Nano images (portraits + scene composites) are the biggest chunk, not the video model.
+- **Roughly $2 for one finished ~75s video** (was ~$3–5 before the Nano Banana non-pro image swap). Seedance video and the Nano images are now roughly even.
 
 ---
 

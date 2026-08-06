@@ -6,8 +6,8 @@ NO lip-sync anywhere, which is exactly what removes the whole class of bugs we h
 before (wrong voice on the wrong face, garbled two-person clips, geography jumps when
 composing reverse angles). Every scene, dialogue or narration, is built the same way:
 
-  1. Compose ONE image of the scene's on-screen cast in the setting (Nano Banana Pro
-     edit, from their locked portraits so faces stay the same). Narration scenes are
+  1. Compose ONE image of the scene's on-screen cast in the setting (Nano Banana
+     non-pro edit, from their locked portraits so faces stay the same). Narration scenes are
      the lone protagonist; dialogue scenes hold everyone the beat puts in the room.
   2. Render ONE **silent** Seedance 1.5 pro clip of that image — the characters act and
      (for dialogue) silently mouth their lines; the protagonist in narration is
@@ -32,8 +32,8 @@ Reads:  output/analysis.json   (characters w/ portraits + voice_id, script scene
 Output: output/clip_XX.mp4 (one per scene) + insert_XX.mp4 (detail beats); writes
         each scene's ordered scene["beats"] list + scene["ambient"] bed.
 Cost:   Seedance 1.5 pro (fal) — $0.026/s at 720p SILENT (every scene clip + detail
-        inserts) + ElevenLabs TTS (the lead voiceover, per character) + $0.15 per
-        composed scene image + ~$0.002/s ambient beds. No lip-sync models.
+        inserts) + ElevenLabs TTS (the lead voiceover, per character) + $0.039 per
+        composed scene image (Nano Banana non-pro) + ~$0.002/s ambient beds. No lip-sync.
 """
 import os
 import sys
@@ -66,8 +66,17 @@ OUT_DIR = "output"
 # video comes in under budget. It runs on fal's own queue, so all the crash-safe
 # submit/poll/resume code below is the SAME machinery, just pointed at a new model.
 VIDEO_MODEL = "fal-ai/bytedance/seedance/v1.5/pro/image-to-video"
-SCENE_EDIT_MODEL = "fal-ai/nano-banana-pro/edit"  # compose chars into one shot
-IMAGE_MODEL = "fal-ai/nano-banana-pro"            # text-to-image (detail with no room ref)
+# Nano Banana NON-PRO (fal) — composes the cast into one scene image, ~4x cheaper than Pro
+# and, in a 7-model bake-off, the only cheaper model that kept the exact cast with correct
+# faces. Flip both ids back to "-pro" (and drop the resolution note below) for higher quality.
+SCENE_EDIT_MODEL = "fal-ai/nano-banana/edit"      # compose chars into one shot (cheap tier)
+IMAGE_MODEL = "fal-ai/nano-banana"                # text-to-image (detail with no room ref)
+# PRO fallback for the compose step ONLY. Non-pro sometimes returns NO image on a hard
+# 2-person shot — it silently gives up (a "no_media_generated" error, NOT a content block:
+# the exact same prompt succeeds on Pro). When non-pro comes back empty we retry that ONE
+# image on Pro, so we pay Pro's higher price only on the few hard scenes that need it.
+SCENE_EDIT_MODEL_PRO = "fal-ai/nano-banana-pro/edit"
+_pro_fallbacks = 0                                 # count of composes that fell back to Pro (for honest cost)
 # The narrator VOICEOVER: we make the words ourselves with ElevenLabs text-to-speech and lay
 # them OVER the silent clip (no lip-sync — the characters are never heard). This is the only
 # voice in the video.
@@ -120,13 +129,13 @@ REACTION_DUR = "5s"       # Seedance's shortest safe length; the editor caps sil
 # DETAIL INSERT: at each NEW location we open on a short, silent, face-free shot of one
 # object that says where we are (a gavel, a nameplate, a case bundle) — the modern
 # replacement for the establishing wide. It orients the viewer before the scene starts,
-# and because it has no faces nothing can drift. One Nano image ($0.15) + one 4s silent
-# Seedance clip ($0.40) per location, cached so we pay once per place. This is real footage,
+# and because it has no faces nothing can drift. One Nano image ($0.039) + one ~5s silent
+# Seedance clip (~$0.13) per location, cached so we pay once per place. This is real footage,
 # not a frozen still — that is why the old still-zoom establishing beat was removed.
 # DISABLED for now (set back to True to re-enable). In the narration style the VOICEOVER
 # already introduces every new place and person (and the location cards label the place on
 # screen), so the detail inserts became a redundant fourth cue — they mostly added visual
-# variety, not orientation. Turning them off saves ~$1.40 per video (5 Nano images + 5 silent
+# variety, not orientation. Turning them off saves ~$0.85 per video (5 Nano images + 5 silent
 # Seedance clips on a typical run) and makes the cut tighter. Kept in the code (make_detail_insert,
 # compose_detail_image, detail_insert_prompt below) so they can be switched on again later.
 DETAIL_INSERTS = False
@@ -210,7 +219,7 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
                         action: str, out_path: str, room_ref: str = None,
                         people: list = None) -> bool:
     """Compose the given character portraits into ONE upright vertical scene image
-    (Nano Banana Pro edit). Keeps their exact faces. Returns True on success.
+    (Nano Banana non-pro edit). Keeps their exact faces. Returns True on success.
 
     Composed VERTICALLY (people in front, room rising behind/above) so the model
     does not rotate a wide layout sideways. room_ref keeps the SAME room when the
@@ -269,24 +278,45 @@ def compose_scene_image(portrait_paths: list, setting: str, shot: str,
             f"with heads near the TOP of the frame, the room rising behind and above them. "
             f"{STYLE}.{no_text} NOT rotated, NOT sideways, NOT landscape."
         )
+    # One compose call: subscribe, download, and say whether it came out upright.
+    # Pro takes a "resolution" (2K); non-pro doesn't — extra args differ by model.
+    def _compose_once(model: str, prompt_text: str, extra: dict) -> bool:
+        r = fal_client.subscribe(
+            model,
+            arguments={"image_urls": urls, "prompt": prompt_text,
+                       "aspect_ratio": "9:16", "num_images": 1, **extra},
+            with_logs=False,
+        )
+        url = r["images"][0]["url"]
+        with open(out_path, "wb") as f:
+            f.write(requests.get(url).content)
+        return is_portrait(out_path)
+
+    # 1) Cheap tier first: up to 2 non-pro attempts (the 2nd nudges it to stay upright).
     for attempt in range(1, 3):
         p = prompt if attempt == 1 else prompt + " CRITICAL: upright vertical frame."
         try:
-            r = fal_client.subscribe(
-                SCENE_EDIT_MODEL,
-                arguments={"image_urls": urls, "prompt": p,
-                           "aspect_ratio": "9:16", "resolution": "2K", "num_images": 1},
-                with_logs=False,
-            )
-            url = r["images"][0]["url"]
-            with open(out_path, "wb") as f:
-                f.write(requests.get(url).content)
-            if is_portrait(out_path):
+            if _compose_once(SCENE_EDIT_MODEL, p, {}):
                 return True
             print(f"    scene image came out landscape; retrying ({attempt})")
         except Exception as e:
-            print(f"    compose attempt {attempt} failed ({e}); retrying in 5s ...")
+            print(f"    compose attempt {attempt} (non-pro) failed ({e}); retrying in 5s ...")
             time.sleep(5)
+    # 2) Pro fallback: non-pro gave nothing usable, so pay for ONE Pro render of this hard
+    #    image. Pro bills whether the frame is upright or not, so we count the fallback as
+    #    soon as the call returns (an exception means nothing was billed).
+    global _pro_fallbacks
+    try:
+        print("    non-pro gave no usable image; falling back to Nano Banana PRO for this one ...")
+        ok = _compose_once(SCENE_EDIT_MODEL_PRO,
+                           prompt + " CRITICAL: upright vertical frame.",
+                           {"resolution": "2K"})
+        _pro_fallbacks += 1
+        if ok:
+            print("    Pro fallback produced the scene image.")
+            return True
+    except Exception as e:
+        print(f"    Pro fallback also failed ({e})")
     return os.path.exists(out_path)
 
 
@@ -312,14 +342,13 @@ def compose_detail_image(detail: str, setting: str, room_ref: str, out_path: str
                 arguments={"image_urls": [url],
                            "prompt": (f"Using the attached image only as the ROOM, show {common} "
                                       f"Keep that room's exact look; place the object naturally in it."),
-                           "aspect_ratio": "9:16", "resolution": "2K", "num_images": 1},
+                           "aspect_ratio": "9:16", "num_images": 1},
                 with_logs=False,
             )
         else:
             r = fal_client.subscribe(
                 IMAGE_MODEL,       # no room to anchor to -> compose the object from text
-                arguments={"prompt": common, "aspect_ratio": "9:16",
-                           "resolution": "2K", "num_images": 1},
+                arguments={"prompt": common, "aspect_ratio": "9:16", "num_images": 1},
                 with_logs=False,
             )
         with open(out_path, "wb") as f:
@@ -1188,6 +1217,9 @@ def main():
                     location_ref.setdefault(loc_key, cov["wide"])
                     coverage_cache[cache_key] = cov
 
+        # Did THIS scene's image need the Pro fallback? (captured around the compose call
+        # below and shown on the scene's summary line, so each step's log flags it clearly.)
+        used_pro_fallback = False
         # NARRATION, coverage off, or coverage failed: one clean composed shot.
         if angles:
             start_img = angles["wide"]
@@ -1213,9 +1245,11 @@ def main():
                                     if sc.get("type") == "dialogue" and len(names) >= 2
                                     else sc.get("shot", ""))
                     locks = [identity_lock(chars_by_name[n]) for n in names]
+                    pf_before = _pro_fallbacks       # detect if this compose falls back to Pro
                     if compose_scene_image(portraits, sc_setting, compose_shot,
                                            sc.get("action", ""), start_img,
                                            room_ref=room_ref, people=locks):
+                        used_pro_fallback = _pro_fallbacks > pf_before
                         scene_images += 1
                         location_ref.setdefault(loc_key, start_img)
                         compose_cache[cache_key] = start_img
@@ -1292,7 +1326,8 @@ def main():
                 os.remove(f)
         sc["beats"] = insert_beats + [beat]
         print(f"  [{i}] {sc.get('type','scene').upper()} [{who}] -> {clip_name} "
-              f"(silent {dur} + VO){' + detail' if insert_beats else ''}")
+              f"(silent {dur} + VO){' + detail' if insert_beats else ''}"
+              f"{'  [image: PRO fallback, $0.15]' if used_pro_fallback else ''}")
 
     # --- Cost: SILENT Seedance clips + the lead's voiceover TTS + sound + images ---------
     # Every scene clip is now SILENT (no audio = the cheaper $0.026/s rate), and the ONLY
@@ -1303,7 +1338,12 @@ def main():
     detail_cost = detail_video_seconds * silent_rate
     tts_cost = tts_chars / 1000 * costs.ELEVEN_TTS_PER_1K_CHARS
     sfx_cost = ambient_seconds * costs.ELEVEN_SFX_PER_SEC                   # ambient beds + music
-    image_cost = scene_images * costs.NANO_BANANA_PRO_EDIT_PER_IMAGE
+    # Images: every composed image is counted once at the cheap rate; each one that had to
+    # fall back to Pro (non-pro returned nothing, so non-pro billed $0) is topped up by the
+    # price gap so its true cost is Pro's rate, not the cheap one.
+    image_cost = (scene_images * costs.NANO_BANANA_EDIT_PER_IMAGE
+                  + _pro_fallbacks * (costs.NANO_BANANA_PRO_EDIT_PER_IMAGE
+                                      - costs.NANO_BANANA_EDIT_PER_IMAGE))
     clip_cost = scene_cost + detail_cost + tts_cost + sfx_cost + image_cost
     costs.record(data, "clips",
                  f"Scenes - Seedance SILENT ({scene_video_seconds:.0f}s) + detail inserts "
@@ -1315,8 +1355,9 @@ def main():
         json.dump(data, f, indent=2, ensure_ascii=False)
 
     n_inserts = sum(1 for v in detail_by_loc.values() if v)
+    fb = f", {_pro_fallbacks} Pro fallback" + ("s" if _pro_fallbacks != 1 else "") if _pro_fallbacks else ""
     print(f"\nUpdated output/analysis.json with the scene beats. "
-          f"({scene_images} images, {len(ambient_by_loc)} ambient beds, {n_inserts} detail inserts)")
+          f"({scene_images} images{fb}, {len(ambient_by_loc)} ambient beds, {n_inserts} detail inserts)")
     costs.show(f"{len(scenes)} scenes (Seedance silent {scene_video_seconds:.0f}s + VO "
                f"{tts_chars} TTS chars + {scene_images} images + sound)", clip_cost)
 

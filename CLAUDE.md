@@ -51,9 +51,17 @@ The video is a first-person **memoir told by one narrator** over cinematic foota
 
 ## The tools (API keys in `.env`)
 - **fal.ai** — images + video.
-  - **Nano Banana Pro** — character portraits (`nano-banana-pro`) + composing the on-screen
-    cast into one scene image (`nano-banana-pro/edit`, using the locked portraits so faces
-    stay the same). $0.15 / 2K image. This is now the biggest cost per video.
+  - **Nano Banana (non-pro)** — character portraits (`nano-banana`) + composing the on-screen
+    cast into one scene image (`nano-banana/edit`, using the locked portraits so faces stay
+    the same). **$0.039 / image**. A 7-model bake-off (Seedream v4/v4.5, FLUX.2 pro/flex,
+    Qwen) showed non-pro is the only cheaper model that keeps the EXACT cast with correct
+    faces — the others invented or duplicated people. **Nano Banana PRO** (`-pro`, $0.15/2K)
+    is the higher-quality tier and is used two ways: (1) an **automatic compose fallback** —
+    non-pro sometimes returns NO image on a hard 2-person shot (a `no_media_generated` error,
+    not a content block: the same prompt succeeds on Pro), so `compose_scene_image` retries
+    that ONE image on Pro. You pay Pro only on the few scenes that fail, and the cost printer
+    counts those fallbacks so the total stays honest. (2) A **manual quality flip** — set the
+    MODEL constants back to the `-pro` ids if the non-pro portraits/faces ever look too soft.
   - **Seedance 1.5 pro i2v** (`fal-ai/bytedance/seedance/v1.5/pro/image-to-video`) — animates
     each scene image into a cinematic clip. We use the **SILENT tier only** (`generate_audio=
     False`, **$0.026/s**) — Seedance's own audio is thrown away (we don't hear the characters),
@@ -83,9 +91,9 @@ then a total cost table and the total run time at the end.
 | 1. Scrape story | `scrape.py <url>` | — | `output/scraped.json` | free |
 | 2. Analyze + invent characters | `analyze.py` | OpenAI GPT-4.1 | `analysis.json` + `.md` | ~$0.03 |
 | 3. Scene script (memoir VO) | `scene_writer.py` | OpenAI GPT-4.1 | adds `script.scenes` to analysis.json | ~$0.03 |
-| 4. Character portraits | `gen_characters.py` | Nano Banana Pro (2K) | `char_*.png` (locked refs) — only for characters the script USES | $0.15 each |
+| 4. Character portraits | `gen_characters.py` | Nano Banana (non-pro) | `char_*.png` (locked refs) — only for characters the script USES | $0.039 each |
 | 5. Voices | `voice_maker.py` | assigns each character a voice_id; **narrator = a RANDOM voice per video** | voice_id on every speaker + the narrating lead | free |
-| 6. Scene clips | `scene_clips.py` | Nano Banana compose + **Seedance 1.5 pro SILENT** + ElevenLabs TTS voiceover + ambience | `clip_*.mp4` | ~$0.026/s Seedance + $0.15/image |
+| 6. Scene clips | `scene_clips.py` | Nano Banana compose + **Seedance 1.5 pro SILENT** + ElevenLabs TTS voiceover + ambience | `clip_*.mp4` | ~$0.026/s Seedance + $0.039/image |
 | 7. Assemble | `assemble.py` | ffmpeg (local) — joins clips, lays ambience + ducked music + location cards | `final_video.mp4` | free |
 
 - **Every scene is built the same way** (`scene_clips.py`): compose ONE image of the on-screen
@@ -99,9 +107,9 @@ then a total cost table and the total run time at the end.
 - Everything ends up in `output/analysis.json` (story, characters, scenes, voice_ids, files).
 - Names are auto-fictionalized and checked (see analyze.py: find names → ban → verify), and
   confusable invented names are rejected by edit-distance.
-- **~$3–5 per finished ~75s video.** Images (portraits + scene composites) are the bulk now,
-  not the video model. `output/music.mp3` (ElevenLabs) is generated automatically. No captions
-  (location cards only).
+- **~$2 per finished ~75s video** (was ~$3–5 on Nano Banana Pro; the non-pro image swap cut
+  it). Seedance (silent video) and the Nano images are now roughly even. `output/music.mp3`
+  (ElevenLabs) is generated automatically. No captions (location cards only).
 
 - `costs.py` — price constants + the per-step cost/time printer; every script prints its cost.
 - `reconcile.py` — REAL cost from the billed-units spy log (`COSTLOG=1`).
@@ -140,7 +148,7 @@ then a total cost table and the total run time at the end.
 - **No silhouettes — every character is a real actor.** Every character (named OR
   hidden-identity) gets a real locked Nano portrait; hidden-identity people are referred to by
   role, never shown as shadows. No cap on cast size.
-- Nano Banana Pro can drift to **landscape** on wide settings or widescreen cues; force "tall
+- Nano Banana can drift to **landscape** on wide settings or widescreen cues; force "tall
   vertical 9:16 portrait".
 - **Sideways/rotated scenes:** a WIDE/horizontal layout makes Nano compose wide and rotate it
   90° to fit 9:16 (people lying sideways; pixel size stays portrait so a size check misses it).
@@ -191,14 +199,14 @@ then a total cost table and the total run time at the end.
 ## Current status
 - **Memoir voiceover pipeline.** `run.py` takes a link → a ~75s vertical video where one
   narrator tells the story over cinematic silent footage; characters are seen acting, never
-  heard; no lip-sync anywhere. ~$3–5 per video (Nano images are the bulk). Detail inserts off.
+  heard; no lip-sync anywhere. ~$2 per video (Nano Banana non-pro images). Detail inserts off.
 - `scene_writer.py` writes 6–8 scenes (narration + "dialogue"-as-silent-acting), each with a
   first-person voiceover, plus per-scene `ambience`, `detail`, `time_jump`. `voice_maker.py`
   gives the narrator a random gender-matched voice. `scene_clips.py` composes each scene image,
   renders ONE silent Seedance clip, and muxes the lead's voiceover over it. `assemble.py` joins
   the clips with the ambience bed, ducked music and location cards.
 - Cost tiers: Seedance 1.5 pro i2v **$0.026/s** (silent, 720p); ElevenLabs TTS **$0.10/1k
-  chars**; ElevenLabs sound-generation **~$0.002/s**; Nano Banana compose/portrait **$0.15/image**.
+  chars**; ElevenLabs sound-generation **~$0.002/s**; Nano Banana non-pro compose/portrait **$0.039/image**.
 - Each script prints its **cost AND run time**; `run.py` prints the total cost table + total run time.
 
 ## Next steps (in order)
