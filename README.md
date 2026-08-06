@@ -33,7 +33,7 @@ and time, plus a total at the end):
 |------|--------|--------------|-------|------|
 | 1 | `scrape.py <url>` | Download story + comments | — | free |
 | 2 | `analyze.py` | Organize + invent fictional characters | OpenAI GPT-4.1 | ~$0.03 |
-| 3 | `scene_writer.py` | Write the scene script (6–8 scenes; a first-person voiceover over each) | OpenAI GPT-4.1 | ~$0.03 |
+| 3 | `scene_writer.py` | Write the scene script (7–9 scenes covering how the events happened; a first-person voiceover over each) | OpenAI GPT-4.1 | ~$0.03 |
 | 4 | `gen_characters.py` | One locked vertical portrait per USED character (scene reference) | fal.ai Nano Banana (non-pro) | $0.039 each |
 | 5 | `voice_maker.py` | Give the narrator a random voice for this video (others don't matter — never heard) | ElevenLabs voice IDs | free |
 | 6 | `scene_clips.py` | Compose each scene image, render one **silent** Seedance clip, lay the narrator's voiceover + ambience over it (no lip-sync) | Nano Banana (non-pro) + Seedance 1.5 pro (silent) + ElevenLabs TTS | ~$0.026/sec Seedance + $0.039/image |

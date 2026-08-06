@@ -200,7 +200,8 @@ then a total cost table and the total run time at the end.
 - **Memoir voiceover pipeline.** `run.py` takes a link → a ~75s vertical video where one
   narrator tells the story over cinematic silent footage; characters are seen acting, never
   heard; no lip-sync anywhere. ~$2 per video (Nano Banana non-pro images). Detail inserts off.
-- `scene_writer.py` writes 6–8 scenes (narration + "dialogue"-as-silent-acting), each with a
+- `scene_writer.py` writes 7–9 scenes (narration + "dialogue"-as-silent-acting) — enough to
+  cover HOW the real events happened (method, the catch), aiming for a ~1–1.5 min video, each with a
   first-person voiceover, plus per-scene `ambience`, `detail`, `time_jump`. `voice_maker.py`
   gives the narrator a random gender-matched voice. `scene_clips.py` composes each scene image,
   renders ONE silent Seedance clip, and muxes the lead's voiceover over it. `assemble.py` joins

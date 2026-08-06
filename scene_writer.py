@@ -6,7 +6,8 @@ over cinematic footage (Goodfellas / House of Cards style). Every scene carries 
 characters are SEEN acting but never HEARD (no synced dialogue, no lip-sync).
 
 It reads the analyzed story + characters AND the raw scraped story, then writes
-6-8 scenes with a real arc:
+7-9 scenes with a real arc (aiming for a ~1 to 1.5 minute video that actually covers
+HOW the events happened, not a rushed 30-second summary):
   - a NARRATION hook to open — the protagonist alone in a fitting place, telling us
     how it began (contemplative, mouth closed; we hear their inner voice),
   - "dialogue" scenes that dramatize the REAL events (people acting + silently
@@ -166,17 +167,30 @@ INTRODUCE NEW FACES (so the viewer is never confused):
   first line or action — belt and braces on top of the pre-name. Never drop a brand-new
   face into a scene with no context.
 
-STRUCTURE (a real beginning, middle and end) — 6 to 8 SCENES total. Let the STORY
-decide how many: a simple story is a tight 6, a rich one with several events earns 8.
+STRUCTURE (a real beginning, middle and end) — 7 to 9 SCENES total. Let the STORY
+decide how many: a simple story is a tight 7, a rich one with several events earns 9.
 Never pad with a scene the story doesn't need, and never starve a real event to save a
-scene — cover every beat the story genuinely has.
+scene — cover every beat the story genuinely has. AIM FOR A FULL SHORT, NOT A TEASER:
+the finished video should run roughly a minute to a minute and a half — never a 30-second
+fragment, and never a 2-minute-plus slog. If your draft has fewer than 7 scenes or skips
+past the real events in one line each, it is TOO THIN — add the missing beats.
+- TELL THE WHOLE STORY, INCLUDING THE "HOW". This is the biggest failure to avoid: do
+  NOT jump from "I did something" straight to "I was convicted." The middle MUST dramatize
+  the real MECHANICS the article actually describes — HOW he pulled it off (the specific
+  method, the fake document, the request he made), the moment it started to UNRAVEL, and
+  exactly WHO noticed and HOW they caught on. Each of those is its own scene. A video that
+  states the crime and the verdict but skips the method and the catch is exactly the thin,
+  rushed result we do not want.
 1. OPEN with exactly one NARRATION scene (beat "intro"): the protagonist, alone in a
    fitting place and doing something, tells us in FIRST PERSON how it began — a
    punchy hook that sets up the scandal.
-2. MIDDLE: 4 to 5 DIALOGUE scenes that DRAMATIZE THE REAL EVENTS, building through
+2. MIDDLE: 5 to 6 DIALOGUE scenes that DRAMATIZE THE REAL EVENTS, building through
    the beats "setup" -> "escalation" -> "twist". Give ONE scene per DISTINCT EVENT
-   or place (e.g. the train exchange = ONE scene, the messages fallout = ONE scene,
-   the tribunal = ONE scene) — do NOT split a single event into several scenes just
+   or place — and make sure the distinct events INCLUDE the method (how he did it), the
+   turn (the moment it started to go wrong) and the catch (who grew suspicious and how),
+   not just the confrontation and the verdict (e.g. the fake request = ONE scene, staff
+   getting suspicious = ONE scene, being traced/arrested = ONE scene, the tribunal = ONE
+   scene) — do NOT split a single event into several scenes just
    to make more of them; fewer, fuller scenes look far more consistent than many
    tiny fragments that reset the set. Each scene is two characters confronting each
    other in one place. Between them you MAY put ONE short NARRATION scene (beat
@@ -209,9 +223,15 @@ HARD RULES:
   an EMPTY place; NEVER put another character, bystander, passer-by, background
   person or crowd in a narration shot — the street/room behind them is deserted. The
   narration text is FIRST PERSON (the protagonist's own "I"/"me"), never third-person.
-- KEEP NARRATION SHORT AND PUNCHY: each narration beat is ONE or at most TWO short
-  sentences (about 18 words / ~7 seconds MAX). It's a sharp hook or button, not a
-  paragraph. Cut every spare word — no rambling, no lists, no repeated ideas.
+- NARRATION LENGTH — TWO to THREE short sentences per beat (about 20 to 24 words /
+  ~8 to 9 seconds). IMPORTANT: each scene becomes ONE clip that maxes out at 10 seconds,
+  so never write more than ~24 words for a beat — anything longer gets cut off. Aim to
+  FILL those ~9 seconds (not the old one-line ~7-second fragment): long enough to carry a
+  real piece of the story, including the HOW ("I sent them a fake police request for the
+  CCTV"), but still tight — no rambling, no lists, no repeated ideas, one clear idea per
+  sentence. The intro and the closing button MAY be shorter (one or two sharp sentences).
+  The full LENGTH of the video comes from having ENOUGH SCENES (7-9), not from overstuffing
+  any single beat — so cover every real event as its own scene rather than cramming.
 - NARRATION MUST NOT DESCRIBE THE PICTURE. It says what the image CANNOT — a private
   thought, a judgement, hindsight, a jump in time, the stakes. It must never narrate
   what we already see: not "I walked into the tribunal" over a shot of him walking in
