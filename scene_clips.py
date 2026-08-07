@@ -6,8 +6,8 @@ NO lip-sync anywhere, which is exactly what removes the whole class of bugs we h
 before (wrong voice on the wrong face, garbled two-person clips, geography jumps when
 composing reverse angles). Every scene, dialogue or narration, is built the same way:
 
-  1. Compose ONE image of the scene's on-screen cast in the setting (Nano Banana
-     non-pro edit, from their locked portraits so faces stay the same). Narration scenes are
+  1. Compose ONE image of the scene's on-screen cast in the setting (Nano Banana 2
+     edit, from their locked portraits so faces stay the same). Narration scenes are
      the lone protagonist; dialogue scenes hold everyone the beat puts in the room.
   2. Render ONE **silent** Seedance 1.5 pro clip of that image — the characters act and
      (for dialogue) silently mouth their lines; the protagonist in narration is
@@ -32,8 +32,8 @@ Reads:  output/analysis.json   (characters w/ portraits + voice_id, script scene
 Output: output/clip_XX.mp4 (one per scene) + insert_XX.mp4 (detail beats); writes
         each scene's ordered scene["beats"] list + scene["ambient"] bed.
 Cost:   Seedance 1.5 pro (fal) — $0.026/s at 720p SILENT (every scene clip + detail
-        inserts) + ElevenLabs TTS (the lead voiceover, per character) + $0.039 per
-        composed scene image (Nano Banana non-pro) + ~$0.002/s ambient beds. No lip-sync.
+        inserts) + ElevenLabs TTS (the lead voiceover, per character) + $0.08 per
+        composed scene image (Nano Banana 2, 1K) + ~$0.002/s ambient beds. No lip-sync.
 """
 import os
 import sys
@@ -66,15 +66,23 @@ OUT_DIR = "output"
 # video comes in under budget. It runs on fal's own queue, so all the crash-safe
 # submit/poll/resume code below is the SAME machinery, just pointed at a new model.
 VIDEO_MODEL = "fal-ai/bytedance/seedance/v1.5/pro/image-to-video"
-# Nano Banana NON-PRO (fal) — composes the cast into one scene image, ~4x cheaper than Pro
-# and, in a 7-model bake-off, the only cheaper model that kept the exact cast with correct
-# faces. Flip both ids back to "-pro" (and drop the resolution note below) for higher quality.
-SCENE_EDIT_MODEL = "fal-ai/nano-banana/edit"      # compose chars into one shot (cheap tier)
-IMAGE_MODEL = "fal-ai/nano-banana"                # text-to-image (detail with no room ref)
-# PRO fallback for the compose step ONLY. Non-pro sometimes returns NO image on a hard
-# 2-person shot — it silently gives up (a "no_media_generated" error, NOT a content block:
-# the exact same prompt succeeds on Pro). When non-pro comes back empty we retry that ONE
-# image on Pro, so we pay Pro's higher price only on the few hard scenes that need it.
+# Nano Banana 2 (fal) = Google Gemini 3.1 Flash Image — composes the cast into one scene
+# image. It REPLACED non-pro ($0.039), which shipped anatomically broken people: one scene
+# came back with a third arm grafted onto a character (arms folded AND a second pair of
+# forearms on the desk doing another character's action) and another character rendered as
+# the wrong gender. The video model cannot fix that — Seedance animates whatever still it is
+# handed — so the image has to be right before we pay to animate it. On a 9-scene bake-off
+# NB2 was clean on both, and it also beat PRO, which duplicated a character in a 2-person
+# shot. We send NO "resolution": 1K is the default and cheapest tier ($0.08), and 2K would
+# cost 1.5x for detail that Seedance at 720p throws away.
+SCENE_EDIT_MODEL = "fal-ai/nano-banana-2/edit"    # compose chars into one shot (1K default)
+IMAGE_MODEL = "fal-ai/nano-banana-2"              # text-to-image (detail with no room ref)
+# PRO fallback for the compose step ONLY. The cheap tier sometimes returns NO image on a
+# hard 2-person shot — it silently gives up (a "no_media_generated" error, NOT a content
+# block: the exact same prompt succeeds on Pro). When that happens we retry that ONE image
+# on Pro, so we pay Pro's higher price only on the few hard scenes that need it. This is a
+# SECOND OPINION from a different model, not an upgrade — Pro tested WORSE than NB2 on cast
+# duplication; it is here so a failed compose still produces a picture.
 SCENE_EDIT_MODEL_PRO = "fal-ai/nano-banana-pro/edit"
 _pro_fallbacks = 0                                 # count of composes that fell back to Pro (for honest cost)
 # The narrator VOICEOVER: we make the words ourselves with ElevenLabs text-to-speech and lay
@@ -129,7 +137,7 @@ REACTION_DUR = "5s"       # Seedance's shortest safe length; the editor caps sil
 # DETAIL INSERT: at each NEW location we open on a short, silent, face-free shot of one
 # object that says where we are (a gavel, a nameplate, a case bundle) — the modern
 # replacement for the establishing wide. It orients the viewer before the scene starts,
-# and because it has no faces nothing can drift. One Nano image ($0.039) + one ~5s silent
+# and because it has no faces nothing can drift. One Nano image ($0.08) + one ~5s silent
 # Seedance clip (~$0.13) per location, cached so we pay once per place. This is real footage,
 # not a frozen still — that is why the old still-zoom establishing beat was removed.
 # DISABLED for now (set back to True to re-enable). In the narration style the VOICEOVER
@@ -196,7 +204,7 @@ def sheet_ref(sheet_path: str, name: str) -> str:
     and return that single clean photo, to be used as the compose reference instead of the
     whole grid. Cached per character (ref_<name>.png).
 
-    WHY: feeding the entire GRID sheet into nano-banana/edit made the compositor ECHO the
+    WHY: feeding the entire GRID sheet into nano-banana-2/edit made the compositor ECHO the
     layout — a one-person narration shot came back as TWO stacked panels of the same man
     (walking up top, standing arms-crossed below). A single, non-grid photo has no layout
     to copy, so the person is composed exactly once. We take the top-left cell because the
@@ -1341,9 +1349,9 @@ def main():
     # Images: every composed image is counted once at the cheap rate; each one that had to
     # fall back to Pro (non-pro returned nothing, so non-pro billed $0) is topped up by the
     # price gap so its true cost is Pro's rate, not the cheap one.
-    image_cost = (scene_images * costs.NANO_BANANA_EDIT_PER_IMAGE
+    image_cost = (scene_images * costs.NANO_BANANA_2_EDIT_PER_IMAGE
                   + _pro_fallbacks * (costs.NANO_BANANA_PRO_EDIT_PER_IMAGE
-                                      - costs.NANO_BANANA_EDIT_PER_IMAGE))
+                                      - costs.NANO_BANANA_2_EDIT_PER_IMAGE))
     clip_cost = scene_cost + detail_cost + tts_cost + sfx_cost + image_cost
     costs.record(data, "clips",
                  f"Scenes - Seedance SILENT ({scene_video_seconds:.0f}s) + detail inserts "

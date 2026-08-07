@@ -12,7 +12,7 @@ Reads:  output/analysis.json    (from analyze.py)
 Output: output/char_<name>.png  (one image per character)
         It also writes the image file name back INTO analysis.json (each
         character gets a "file" field), so everything stays in one place.
-Cost:   $0.039 per character image (Nano Banana non-pro) — every character, named or
+Cost:   $0.08 per character image (Nano Banana 2, 1K) — every character, named or
         hidden-identity, gets one real locked portrait.
 """
 import os
@@ -30,11 +30,13 @@ load_dotenv()
 if not os.getenv("FAL_KEY"):
     sys.exit("ERROR: FAL_KEY is empty. Open .env and paste your fal.ai key.")
 
-# Nano Banana NON-PRO (fal) — ~4x cheaper than Pro and, in a 7-model bake-off, the only
-# cheaper model that kept the exact cast with correct faces. These portraits are the locked
-# identity reference reused everywhere downstream, so if the faces ever look too soft, flip
-# this back to "fal-ai/nano-banana-pro" (and re-add resolution="2K" in make_image).
-MODEL = "fal-ai/nano-banana"        # photorealistic people, cheaper tier
+# Nano Banana 2 (fal) = Google Gemini 3.1 Flash Image. These portraits are the locked
+# identity reference reused everywhere downstream, so body errors here poison every scene
+# the character appears in — which is why we moved up from non-pro ($0.039), whose people
+# came out with extra limbs and drifting gender. We run the 1K DEFAULT: no "resolution"
+# argument is sent, so we pay the $0.08 base rate (2K would be 1.5x for detail that
+# Seedance at 720p throws away anyway).
+MODEL = "fal-ai/nano-banana-2"      # photorealistic people, 1K default
 OUT_DIR = "output"
 
 # Every character is rendered ONCE as a neutral, multi-angle reference sheet, then
@@ -77,11 +79,12 @@ def slug(name: str) -> str:
 
 
 def make_image(prompt: str, out_path: str, aspect_ratio: str = "16:9"):
-    """Send one prompt to Nano Banana (non-pro) and save the returned image.
+    """Send one prompt to Nano Banana 2 and save the returned image.
     Nano Banana takes an aspect_ratio (not width/height like FLUX). The reference sheet
     defaults to 16:9 so the four-column, two-row grid of eight shots has room to breathe —
     a 9:16 frame would squeeze eight views into a thin column and lose facial detail.
-    (Non-pro has no "resolution" param; Pro used resolution="2K" for extra sharpness.)"""
+    We deliberately send NO "resolution": 1K is the default and the cheapest tier, and
+    passing "2K" would cost 1.5x for sharpness the 720p video model discards."""
     result = fal_client.subscribe(
         MODEL,
         arguments={
@@ -133,7 +136,7 @@ def main():
 
     # Only draw a face for characters who ACTUALLY appear in the script — analyze
     # often invents extra people (a coroner, a witness) the script never uses, and
-    # a portrait for someone who never appears is $0.039 wasted. This is why the
+    # a portrait for someone who never appears is $0.08 wasted. This is why the
     # pipeline writes the script BEFORE this step. Used = anyone listed in a scene,
     # plus the first two named leads (they fill the narration establishing shots).
     scenes = (data.get("script") or {}).get("scenes", [])
@@ -155,7 +158,8 @@ def main():
         name = c["fictional_name"]
         if name not in used:
             # Not in the script — skip it and save the render.
-            print(f"- {name} ({c['role']}) — not in the script, skipped (saved $0.039)")
+            print(f"- {name} ({c['role']}) — not in the script, skipped "
+                  f"(saved ${costs.NANO_BANANA_2_PER_IMAGE})")
             continue
         file_name = f"char_{slug(name)}.png"
         out_path = os.path.join(OUT_DIR, file_name)
@@ -171,7 +175,7 @@ def main():
             continue
 
         # EVERY used character gets a real, photorealistic locked reference sheet
-        # (Nano Banana non-pro) — including the hidden-identity people. They are real
+        # (Nano Banana 2) — including the hidden-identity people. They are real
         # actors on screen, not shadows; the only difference is they are referred to
         # by role, not a real name. The character's own appearance description leads;
         # CHAR_SHEET forces the neutral, multi-angle sheet layout on top of it.
@@ -179,7 +183,7 @@ def main():
         prompt = f"{c['image_prompt']} {CHAR_SHEET}"
         print(f"- {who} ...")
         make_image(prompt, out_path)
-        total_cost += costs.NANO_BANANA_PER_IMAGE
+        total_cost += costs.NANO_BANANA_2_PER_IMAGE
 
         print(f"  saved {out_path}")
         # Write the image file name back into this character, so everything
@@ -188,7 +192,7 @@ def main():
 
     # Record this step's real cost for the end-of-pipeline summary.
     costs.record(data, "images",
-                 f"Character portraits - Nano Banana non-pro x{len(to_make)}",
+                 f"Character portraits - Nano Banana 2 (1K) x{len(to_make)}",
                  total_cost)
 
     # Save the whole analysis file back, now with the image files included.

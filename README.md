@@ -19,7 +19,7 @@ story in the first person** over cinematic footage — like Goodfellas or House 
 Cards. The other characters are **seen acting** in their scenes but are **never
 heard**; there is no synced dialogue and no lip-sync (that's what makes it reliable
 and cheap). The narrator's voiceover, small on-screen location cards, per-location
-background ambience and ducked music carry it. Cost: **about $2 per video.**
+background ambience and ducked music carry it. Cost: **about $2.60 per video.**
 
 ### Run it
 ```bash
@@ -49,9 +49,9 @@ and time, plus a total at the end):
 | 1 | `scrape.py <url>` | Download story + comments | — | free |
 | 2 | `analyze.py` | Organize + invent fictional characters | OpenAI GPT-4.1 | ~$0.03 |
 | 3 | `scene_writer.py` | Write the scene script (7–9 scenes covering how the events happened; a first-person voiceover over each) | OpenAI GPT-4.1 | ~$0.03 |
-| 4 | `gen_characters.py` | One locked vertical portrait per USED character (scene reference) | fal.ai Nano Banana (non-pro) | $0.039 each |
+| 4 | `gen_characters.py` | One locked vertical portrait per USED character (scene reference) | fal.ai Nano Banana 2 (1K) | $0.08 each |
 | 5 | `voice_maker.py` | Give the narrator a random voice for this video (others don't matter — never heard) | ElevenLabs voice IDs | free |
-| 6 | `scene_clips.py` | Compose each scene image, render one **silent** Seedance clip, lay the narrator's voiceover + ambience over it (no lip-sync) | Nano Banana (non-pro) + Seedance 1.5 pro (silent) + ElevenLabs TTS | ~$0.026/sec Seedance + $0.039/image |
+| 6 | `scene_clips.py` | Compose each scene image, render one **silent** Seedance clip, lay the narrator's voiceover + ambience over it (no lip-sync) | Nano Banana 2 (1K) + Seedance 1.5 pro (silent) + ElevenLabs TTS | ~$0.026/sec Seedance + $0.08/image |
 | 7 | `assemble.py` | Join the clips + ambience + ducked music + location cards | ffmpeg (local) | free |
 
 ### Results (in `output/`)
@@ -115,8 +115,9 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
   (detail inserts are disabled by default).
 - **Character consistency:** one locked Nano Banana portrait per character, fed as a
   reference when composing each scene image, plus a per-location room anchor.
-- **Auto Pro fallback on the scene image:** the cheap non-pro model sometimes returns no
-  image on a hard two-person shot, so we retry that one image on Nano Banana Pro. You only
+- **Auto Pro fallback on the scene image:** Nano Banana 2 sometimes returns no
+  image on a hard two-person shot, so we retry that one image on Nano Banana Pro. Pro is a
+  second opinion, not a better model — it duplicated a character in our bake-off. You only
   pay Pro's higher price on the few scenes that need it, and the printed cost counts it.
 - **Per-location ambience** (party chatter, train rumble) runs continuously under each
   scene, below the voice; music runs unbroken and is ducked under the narration.
@@ -128,17 +129,17 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 ## Costs (estimates from provider pricing)
 - Scrape: free
 - Analyze + scene script (OpenAI GPT-4.1): ~$0.06 per story
-- Character portrait (Nano Banana non-pro): $0.039 each
-- Composed scene image (Nano Banana non-pro): $0.039 per scene
+- Character portrait (Nano Banana 2, 1K): $0.08 each
+- Composed scene image (Nano Banana 2, 1K): $0.08 per scene
 - Scene clip — Seedance 1.5 pro **silent**: $0.026 per second
 - Narrator voiceover (ElevenLabs TTS): $0.10 / 1,000 characters; ambience + music (sound-generation): ~$0.002/sec
-- **Roughly $2 for one finished ~75s video** (was ~$3–5 before the Nano Banana non-pro image swap). Seedance video and the Nano images are now roughly even.
+- **Roughly $2.60 for one finished ~75s video** (~15 images at $0.08 = ~$1.20, Seedance ~$1.20, sound + text the rest). It was ~$2 on Nano Banana non-pro, but non-pro shipped people with extra limbs and the wrong gender, so the extra ~$0.60 buys images that are actually usable.
 
 ---
 
 ## Next improvements
 - Editing variety: reaction beats, zoom-ins, better music, optional detail inserts back on.
-- Cheaper/faster: fewer Nano images (cap cast, reuse composites); parallelize the clip renders.
+- Cheaper/faster: fewer Nano images (cap cast, reuse composites); parallelize the clip renders. Images are now the biggest single line, so reuse pays more than it used to.
 
 ## Final vision (later)
 Fully automated pipeline: scrape sources → score stories (good vs. bad) →

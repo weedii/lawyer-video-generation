@@ -51,17 +51,31 @@ The video is a first-person **memoir told by one narrator** over cinematic foota
 
 ## The tools (API keys in `.env`)
 - **fal.ai** — images + video.
-  - **Nano Banana (non-pro)** — character portraits (`nano-banana`) + composing the on-screen
-    cast into one scene image (`nano-banana/edit`, using the locked portraits so faces stay
-    the same). **$0.039 / image**. A 7-model bake-off (Seedream v4/v4.5, FLUX.2 pro/flex,
-    Qwen) showed non-pro is the only cheaper model that keeps the EXACT cast with correct
-    faces — the others invented or duplicated people. **Nano Banana PRO** (`-pro`, $0.15/2K)
-    is the higher-quality tier and is used two ways: (1) an **automatic compose fallback** —
-    non-pro sometimes returns NO image on a hard 2-person shot (a `no_media_generated` error,
-    not a content block: the same prompt succeeds on Pro), so `compose_scene_image` retries
-    that ONE image on Pro. You pay Pro only on the few scenes that fail, and the cost printer
-    counts those fallbacks so the total stays honest. (2) A **manual quality flip** — set the
-    MODEL constants back to the `-pro` ids if the non-pro portraits/faces ever look too soft.
+  - **Nano Banana 2** (Google Gemini 3.1 Flash Image) — character portraits (`nano-banana-2`)
+    + composing the on-screen cast into one scene image (`nano-banana-2/edit`, using the
+    locked portraits so faces stay the same). **$0.08 / image at 1K**. fal charges a
+    multiplier per resolution tier (512px 0.75x, **1K 1.0x = default**, 2K 1.5x, 4K 2.0x), so
+    we send **no `resolution` argument** and pay the base rate — 1K is all Seedance (720p)
+    and the 1080x1920 final cut can use, and 2K detail would be thrown away.
+  - **Why we left non-pro** (`nano-banana`, $0.039): it shipped anatomically broken people.
+    One scene came back with a **third arm** on a character (arms folded AND a second pair of
+    forearms on the desk doing ANOTHER character's action, because the action text gave the
+    laptop to someone the compositor had placed out of reach), and that same scene rendered a
+    female character as a man. Seedance cannot fix any of that — it animates whatever still
+    it is handed — so the image must be right before we pay to animate it.
+  - **Bake-off, 9 real scenes, same prompts** (the earlier 7-model one — Seedream v4/v4.5,
+    FLUX.2 pro/flex, Qwen — had already eliminated the cheap alternatives, which invented or
+    duplicated people): **NB2 was clean on every scene**, including the third-arm scene and a
+    3-person shot. **Nano Banana PRO ($0.15) fixed the anatomy but DUPLICATED a character**
+    in a 2-person shot. **GPT Image 2** (OpenAI direct, ~$0.03/1K — the cheapest of the
+    three) **also duplicated a character** and let the room drift from a cramped office to a
+    bar. So NB2 wins on correctness, and Pro is NOT an upgrade over it.
+  - **Nano Banana PRO** (`-pro`, $0.15) is kept ONLY as the **automatic compose fallback**:
+    the cheap tier sometimes returns NO image on a hard 2-person shot (a `no_media_generated`
+    error, not a content block — the same prompt succeeds on Pro), so `compose_scene_image`
+    retries that ONE image on Pro. It is a second opinion from a different model, not a
+    quality tier. You pay Pro only on the few scenes that fail, and the cost printer counts
+    those fallbacks so the total stays honest.
   - **Seedance 1.5 pro i2v** (`fal-ai/bytedance/seedance/v1.5/pro/image-to-video`) — animates
     each scene image into a cinematic clip. We use the **SILENT tier only** (`generate_audio=
     False`, **$0.026/s**) — Seedance's own audio is thrown away (we don't hear the characters),
@@ -90,7 +104,7 @@ then a total cost table and the total run time at the end.
 run. If you already built this SAME link, it asks (plain English): **START OVER** (wipe +
 full rebuild), **REPAIR** (keep the last run's story + narrator voice, health-scan every
 artifact, delete the broken ones, and re-make ONLY the missing/broken clips + re-join —
-~$0.25/clip), or **SCAN** (print OK/missing/broken and stop, free). Flags skip the prompt
+~$0.29/clip), or **SCAN** (print OK/missing/broken and stop, free). Flags skip the prompt
 for automation: `--fresh`, `--repair`, `--scan`. Repair deliberately SKIPS scrape/analyze/
 scene_writer (AI = a different story every run) and voice_maker (a new random voice) and
 reuses `output/analysis.json`. The "re-make only what's broken" trick: the doctor DELETES
@@ -103,24 +117,26 @@ reusable brand assets (`output/look.cube`). Last run's summary is saved to
 | 1. Scrape story | `scrape.py <url>` | — | `output/scraped.json` | free |
 | 2. Analyze + invent characters | `analyze.py` | OpenAI GPT-4.1 | `analysis.json` + `.md` | ~$0.03 |
 | 3. Scene script (memoir VO) | `scene_writer.py` | OpenAI GPT-4.1 | adds `script.scenes` to analysis.json | ~$0.03 |
-| 4. Character portraits | `gen_characters.py` | Nano Banana (non-pro) | `char_*.png` (locked refs) — only for characters the script USES | $0.039 each |
+| 4. Character portraits | `gen_characters.py` | Nano Banana 2 (1K) | `char_*.png` (locked refs) — only for characters the script USES | $0.08 each |
 | 5. Voices | `voice_maker.py` | assigns each character a voice_id; **narrator = a RANDOM voice per video** | voice_id on every speaker + the narrating lead | free |
-| 6. Scene clips | `scene_clips.py` | Nano Banana compose + **Seedance 1.5 pro SILENT** + ElevenLabs TTS voiceover + ambience | `clip_*.mp4` | ~$0.026/s Seedance + $0.039/image |
+| 6. Scene clips | `scene_clips.py` | Nano Banana 2 compose + **Seedance 1.5 pro SILENT** + ElevenLabs TTS voiceover + ambience | `clip_*.mp4` | ~$0.026/s Seedance + $0.08/image |
 | 7. Assemble | `assemble.py` | ffmpeg (local) — joins clips, lays ambience + ducked music + location cards | `final_video.mp4` | free |
 
 - **Every scene is built the same way** (`scene_clips.py`): compose ONE image of the on-screen
-  cast (`nano-banana-pro/edit`) → render ONE **silent** Seedance clip → TTS the lead's
+  cast (`nano-banana-2/edit`) → render ONE **silent** Seedance clip → TTS the lead's
   voiceover for that scene → mux the voiceover over the silent clip (no lip-sync; the picture
   is trimmed to the voice length). Narration scenes are the lone lead, contemplative, mouth
   closed. Dialogue scenes show the cast acting silently.
 - **Character consistency:** one locked Nano portrait per character, reused as a reference
-  into `nano-banana-pro/edit` for every scene image. A per-location anchor keeps the room
+  into `nano-banana-2/edit` for every scene image. A per-location anchor keeps the room
   identical when the cast changes.
 - Everything ends up in `output/analysis.json` (story, characters, scenes, voice_ids, files).
 - Names are auto-fictionalized and checked (see analyze.py: find names → ban → verify), and
   confusable invented names are rejected by edit-distance.
-- **~$2 per finished ~75s video** (was ~$3–5 on Nano Banana Pro; the non-pro image swap cut
-  it). Seedance (silent video) and the Nano images are now roughly even. `output/music.mp3`
+- **~$2.60 per finished ~75s video** (~15 images at $0.08 = ~$1.20, Seedance ~$1.20, sound +
+  text the rest). It was ~$2 on non-pro, but non-pro shipped extra limbs and wrong genders,
+  so the extra ~$0.60 buys images that are actually usable. Images and Seedance are now
+  roughly even, which makes composite REUSE the biggest remaining saving. `output/music.mp3`
   (ElevenLabs) is generated automatically. No captions (location cards only).
 
 - `manager.py` — the run brain: detect a prior run of the same link, ask start-over/repair/
@@ -151,10 +167,10 @@ reusable brand assets (`output/look.cube`). Last run's summary is saved to
   off saves ~$1.40/video. Flip to `True` to bring back the face-free establishing beat.
 - One **locked image per character**, reused every time = consistency.
 - **Character consistency across scenes:** keep one locked portrait per character (Nano Banana
-  Pro), then pass those portraits as **references** into `nano-banana-pro/edit` when composing
+  2), then pass those portraits as **references** into `nano-banana-2/edit` when composing
   each scene image — faces stay the same.
 - **Anchor the ROOM when the cast changes:** keep a per-location anchor (the first image shot
-  there) and pass it into `nano-banana-pro/edit` — "keep this exact room, only place the new
+  there) and pass it into `nano-banana-2/edit` — "keep this exact room, only place the new
   people in it" (`location_ref`). Without it the model reinvents the room (a warm courtroom
   became a blue night skyscraper).
 - **A shot contains ONLY its on-screen cast — nobody else.** If the script's `action`/`shot`
@@ -196,6 +212,20 @@ reusable brand assets (`output/look.cube`). Last run's summary is saved to
   establishing beats (read as the video freezing).
 
 ## History — approaches we tried and dropped (do not resurrect without reason)
+- **Nano Banana non-pro as the image model** ($0.039) — dropped for **Nano Banana 2** ($0.08
+  at 1K). Non-pro shipped broken bodies that Seedance then animated as-is: a third arm on a
+  character, and a woman rendered as a man. Also tested and rejected in the same 9-scene
+  bake-off: **Nano Banana Pro** ($0.15 — fixed anatomy but duplicated a character in a
+  2-person shot) and **GPT Image 2** (OpenAI direct, ~$0.03 — duplicated a character AND let
+  the room drift). Cheaper is not the question; **correct cast** is.
+- **An automated "image gate"** (GPT-4.1 vision checking every generated image for extra
+  limbs before paying to animate it) — **built and dropped**. It reliably catches COUNT
+  errors (a duplicated person, wrong cast size) but MISSED the actual third arm at full
+  frame; only a zoomed crop of that region caught it, and upscaling the whole frame did
+  nothing because the API downscales it anyway (identical token count). Tiling every image
+  into crops would have cost ~$0.016/image. Moving to Nano Banana 2 fixed the bug at the
+  source instead. Resurrect only if a model regresses and per-image verification is worth
+  the tiling cost.
 - **On-screen synced dialogue (the long dead end).** We tried to make 2–3 characters talk to
   each other in one shot with correct voices + matching lips. Path went Veo 3.1 → Kling v3 →
   **Seedance 1.5 pro** (native voices) → decouple with **ElevenLabs TTS + lip-sync re-dub**
@@ -215,7 +245,7 @@ reusable brand assets (`output/look.cube`). Last run's summary is saved to
 ## Current status
 - **Memoir voiceover pipeline.** `run.py` takes a link → a ~75s vertical video where one
   narrator tells the story over cinematic silent footage; characters are seen acting, never
-  heard; no lip-sync anywhere. ~$2 per video (Nano Banana non-pro images). Detail inserts off.
+  heard; no lip-sync anywhere. ~$2.60 per video (Nano Banana 2 images at 1K). Detail inserts off.
 - `scene_writer.py` writes 7–9 scenes (narration + "dialogue"-as-silent-acting) — enough to
   cover HOW the real events happened (method, the catch), aiming for a ~1–1.5 min video, each with a
   first-person voiceover, plus per-scene `ambience`, `detail`, `time_jump`. `voice_maker.py`
@@ -223,7 +253,7 @@ reusable brand assets (`output/look.cube`). Last run's summary is saved to
   renders ONE silent Seedance clip, and muxes the lead's voiceover over it. `assemble.py` joins
   the clips with the ambience bed, ducked music and location cards.
 - Cost tiers: Seedance 1.5 pro i2v **$0.026/s** (silent, 720p); ElevenLabs TTS **$0.10/1k
-  chars**; ElevenLabs sound-generation **~$0.002/s**; Nano Banana non-pro compose/portrait **$0.039/image**.
+  chars**; ElevenLabs sound-generation **~$0.002/s**; Nano Banana 2 compose/portrait **$0.08/image at 1K**.
 - Each script prints its **cost AND run time**; `run.py` prints the total cost table + total run time.
 
 ## Next steps (in order)

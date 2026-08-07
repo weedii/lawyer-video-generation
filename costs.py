@@ -2,11 +2,13 @@
 cost (and run time) using these, so we always know what we spent.
 
 CURRENT PIPELINE (memoir voiceover) uses only:
-- Nano Banana (non-pro) (portraits + scene composites):  $0.039 / image
-    fal.ai/models/fal-ai/nano-banana (+ /edit)
-    (Nano Banana PRO, $0.15/2K, is the higher-quality option — see the Pro constants
-    below; a 7-model bake-off showed non-pro is the only cheaper model that still keeps
-    the exact cast with correct faces, so we run non-pro by default.)
+- Nano Banana 2 (portraits + scene composites):    $0.08 / image at 1K
+    fal.ai/models/fal-ai/nano-banana-2 (+ /edit)   (Google Gemini 3.1 Flash Image)
+    (Nano Banana PRO, $0.15, stays as the automatic compose fallback — see the Pro
+    constants below. We moved UP from non-pro ($0.039) because non-pro shipped broken
+    bodies: a scene came back with a third arm on one character and another character
+    rendered as the wrong gender. Nano Banana 2 fixed both, and on a 9-scene bake-off it
+    also beat PRO — Pro duplicated a character in a 2-person shot, NB2 did not.)
 - Seedance 1.5 Pro image-to-video, SILENT tier:    $0.026 / sec
     fal.ai/models/fal-ai/bytedance/seedance/v1.5/pro/image-to-video
 - ElevenLabs Text-to-Speech (narrator voiceover):  $0.10 / 1,000 chars
@@ -20,29 +22,46 @@ LatentSync, Speech-to-Speech) is LEGACY — from approaches we tried and dropped
 the current pipeline. See CLAUDE.md "History".
 """
 
-# Our generated images are 720x1280 = 0.88 MP, which fal ROUNDS UP to 1 MP.
-# So at our size, the "per megapixel" prices below equal the "per image" cost.
+# Our generated images come out around 1 MP (Nano Banana 2 at its 1K tier returns e.g.
+# 1376x768 landscape / 768x1376 vertical = ~1.06 MP), which fal treats as 1 MP. So for the
+# per-MEGAPIXEL models further down, the listed price also equals the per-image cost.
+# (Nano Banana itself is billed per IMAGE by tier, not per megapixel — see below.)
 OUR_IMAGE_MEGAPIXELS = 1
 
 # --- Image models (fal) ---------------------------------------------------
-# Nano Banana (non-pro) — OUR CURRENT image model, flat per image. Portraits
-# (gen_characters.py) and scene composites (scene_clips.py) both use it. ~4x cheaper
-# than Pro and, in a 7-model bake-off, the only cheaper model that kept the exact cast
-# with correct faces (Seedream / FLUX.2 / Qwen all invented or duplicated people).
-#     fal.ai/models/fal-ai/nano-banana (+ /edit)
-NANO_BANANA_PER_IMAGE = 0.039        # portraits (text-to-image)
-NANO_BANANA_EDIT_PER_IMAGE = 0.039   # scene composites (compose the cast into one shot)
+# Nano Banana 2 (Google Gemini 3.1 Flash Image) — OUR CURRENT image model. Portraits
+# (gen_characters.py) and scene composites (scene_clips.py) both use it.
+#     fal.ai/models/fal-ai/nano-banana-2 (+ /edit)
+#
+# RESOLUTION TIERS (fal charges a multiplier on the 1K base price):
+#     512x512  0.75x = $0.06
+#     1K       1.00x = $0.08   <- DEFAULT, and what we use
+#     2K       1.50x = $0.12
+#     4K       2.00x = $0.16
+# 1K is the DEFAULT, so we send NO "resolution" argument at all and pay the base rate.
+# 1K is also all we need: the composed image only has to feed Seedance, which renders at
+# 720p, and assemble.py outputs 1080x1920. Paying 1.5x for 2K would be thrown away.
+NANO_BANANA_2_PER_IMAGE = 0.08        # portraits (text-to-image), 1K
+NANO_BANANA_2_EDIT_PER_IMAGE = 0.08   # scene composites (compose the cast into one shot), 1K
 
-# Nano Banana PRO (higher quality, ~4x the price). Two uses:
-#   1) NANO_BANANA_PRO_EDIT_PER_IMAGE is the AUTOMATIC compose fallback — scene_clips.py
-#      tries non-pro first, and when non-pro returns no image on a hard 2-person shot it
-#      retries that ONE image on Pro. The per-video cost adds this price only for the
-#      composes that actually fell back (scene_clips counts them), so the printed cost is
-#      honest whether 0 or 3 scenes needed Pro.
-#   2) Manual quality option — flip the MODEL constants in gen_characters.py / scene_clips.py
-#      to the "-pro" ids if the non-pro portraits/faces ever look too soft.
-NANO_BANANA_PRO_PER_IMAGE = 0.15         # Pro portrait, 2K
-NANO_BANANA_PRO_EDIT_PER_IMAGE = 0.15    # Pro compose, 2K (also the auto compose-fallback price)
+# Nano Banana PRO — the AUTOMATIC compose fallback (scene_clips.py). NB2 is tried first;
+# when it returns no image on a hard multi-person shot, that ONE image is retried on Pro.
+# The per-video cost adds this price only for the composes that actually fell back
+# (scene_clips counts them), so the printed cost is honest whether 0 or 3 scenes needed Pro.
+# NOTE: Pro is the fallback, NOT an upgrade — on a 9-scene bake-off Pro DUPLICATED a
+# character in a 2-person shot while NB2 rendered the cast correctly. It is here because a
+# second opinion from a different model beats returning no image at all.
+#     fal.ai/models/fal-ai/nano-banana-pro/edit
+NANO_BANANA_PRO_PER_IMAGE = 0.15         # Pro portrait (1K and 2K are both $0.15; 4K is $0.30)
+NANO_BANANA_PRO_EDIT_PER_IMAGE = 0.15    # Pro compose (also the auto compose-fallback price)
+
+# LEGACY — Nano Banana non-pro (Gemini 2.5 Flash Image), the model we ran before NB2.
+# Kept only so old runs / api_calls.jsonl logs still price correctly. Do not use: it was
+# replaced because it shipped anatomically broken people (a third arm grafted onto a
+# character, and a woman rendered as a man) that the video model then animated as-is.
+#     fal.ai/models/fal-ai/nano-banana (+ /edit)
+NANO_BANANA_PER_IMAGE = 0.039        # legacy portraits
+NANO_BANANA_EDIT_PER_IMAGE = 0.039   # legacy scene composites
 
 # FLUX.1 [dev]: $0.025/MP -> $0.025 per image at our size. Used for the
 # establishing shot and (currently) the anonymous silhouettes.

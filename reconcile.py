@@ -7,6 +7,7 @@ HOW fal billing actually works (verified on the live run + fal's official docs):
   - fal returns the billed amount in the response header  x-fal-billable-units.
   - That number is the count of the model's OWN native unit, and each model has
     its own price per unit:
+        nano-banana-2 / .../edit              1 unit  = 1 image        $0.08 (1K)
         nano-banana-pro / .../edit            1 unit  = 1 image        $0.15
         flux/dev                              1 unit  = 1 image        $0.025
         bytedance/seedance/v1.5/pro i2v       1 unit  = 1 MILLION tok  $2.40 audio / $1.20 silent
@@ -57,14 +58,23 @@ SEEDANCE_AUDIO_PER_MTOK = 2.40     # $2.40 / MILLION tokens (720p WITH audio —
 SEEDANCE_NOAUDIO_PER_MTOK = 1.20   # $1.20 / MILLION tokens (720p no audio — silent inserts)
 
 PRICES = {
-    # Pro is the AUTOMATIC compose fallback: scene_clips tries non-pro first and retries a
-    # hard image on Pro when non-pro returns nothing, so a "non-pro" run can legitimately
-    # bill a few nano-banana-pro/edit images. Both tiers price correctly here because they
-    # are separate namespaces (a failed non-pro attempt bills $0 and never reaches results).
-    "nano-banana-pro/edit": 0.15,   # $0.15 / composed image (2K)   (check /edit first)
-    "nano-banana-pro": 0.15,        # $0.15 / portrait image (2K)
-    # Non-pro (CURRENT default) — MUST stay AFTER the -pro keys above, since "nano-banana"
-    # is a prefix of "nano-banana-pro" and full_model() takes the first matching prefix.
+    # ORDER MATTERS. "nano-banana" is a PREFIX of both "nano-banana-2" and
+    # "nano-banana-pro", and full_model() takes the FIRST matching prefix — so the longer,
+    # more specific keys must all come BEFORE the bare "nano-banana" ones at the bottom.
+    #
+    # Pro is the AUTOMATIC compose fallback: scene_clips tries Nano Banana 2 first and
+    # retries a hard image on Pro when NB2 returns nothing, so a normal run can legitimately
+    # bill a few nano-banana-pro/edit images. Each tier prices correctly here because they
+    # are separate namespaces (a failed NB2 attempt bills $0 and never reaches results).
+    "nano-banana-pro/edit": 0.15,   # $0.15 / composed image        (check /edit first)
+    "nano-banana-pro": 0.15,        # $0.15 / portrait image
+    # Nano Banana 2 (CURRENT default) at the 1K tier we run. If you ever pass
+    # resolution="2K" the real bill is 1.5x this ($0.12) and 4K is 2x ($0.16) — update
+    # these numbers too, or the "REAL cost" printed here stops being real.
+    "nano-banana-2/edit": 0.08,     # $0.08 / composed image (1K)
+    "nano-banana-2": 0.08,          # $0.08 / portrait image (1K)
+    # LEGACY non-pro — kept so older api_calls.jsonl logs still price correctly.
+    # MUST stay LAST of the nano-banana keys (see the ORDER MATTERS note above).
     "nano-banana/edit": 0.039,      # $0.039 / composed image
     "nano-banana": 0.039,           # $0.039 / portrait image
     "flux/dev": 0.025,              # $0.025 / image (1 MP)

@@ -39,9 +39,10 @@ FINAL = os.path.join(OUT_DIR, "final_video.mp4")
 # A clip shorter than this many seconds is treated as broken (a crash mid-render can
 # leave a tiny truncated file that would otherwise be "reused" and wreck the video).
 MIN_CLIP_SECS = 1.0
-# Rough price of re-making one scene clip (Seedance ~8s + one composed image), used only
-# to show the user an estimate before a repair. The real cost is printed after the run.
-REPAIR_PER_CLIP = 0.25
+# Rough price of re-making one scene clip: Seedance ~8s silent (~$0.21) + one composed
+# image on Nano Banana 2 at 1K ($0.08). Used only to show the user an estimate before a
+# repair; the real cost is printed after the run.
+REPAIR_PER_CLIP = 0.29
 
 
 # --------------------------------------------------------------------------- files
