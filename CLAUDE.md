@@ -83,8 +83,20 @@ The video is a first-person **memoir told by one narrator** over cinematic foota
 Run from the project root with the venv activated (`source .venv/bin/activate`), then use `python`.
 
 One command does everything: `python run.py "<story-url>"` → `output/final_video.mp4`.
-`run.py` is the manager; it runs 7 steps in order and prints each step's cost AND time,
+`run.py` is the runner; it runs 7 steps in order and prints each step's cost AND time,
 then a total cost table and the total run time at the end.
+
+**Re-runs are managed (`manager.py`).** Before the steps, `run.py` asks `manager.py` how to
+run. If you already built this SAME link, it asks (plain English): **START OVER** (wipe +
+full rebuild), **REPAIR** (keep the last run's story + narrator voice, health-scan every
+artifact, delete the broken ones, and re-make ONLY the missing/broken clips + re-join —
+~$0.25/clip), or **SCAN** (print OK/missing/broken and stop, free). Flags skip the prompt
+for automation: `--fresh`, `--repair`, `--scan`. Repair deliberately SKIPS scrape/analyze/
+scene_writer (AI = a different story every run) and voice_maker (a new random voice) and
+reuses `output/analysis.json`. The "re-make only what's broken" trick: the doctor DELETES
+broken files, then the normal resume-guarded steps regenerate exactly those. A wipe keeps
+reusable brand assets (`output/look.cube`). Last run's summary is saved to
+`output/run_state.json`.
 
 | Step | Script | Model | Output | Cost |
 |------|--------|-------|--------|------|
@@ -111,6 +123,10 @@ then a total cost table and the total run time at the end.
   it). Seedance (silent video) and the Nano images are now roughly even. `output/music.mp3`
   (ElevenLabs) is generated automatically. No captions (location cards only).
 
+- `manager.py` — the run brain: detect a prior run of the same link, ask start-over/repair/
+  scan (plain-English prompts), health-check every artifact (ffprobe: clip has picture +
+  voiceover + sane length), delete broken files so the steps rebuild them, wipe/keep the
+  folder, and save `run_state.json`.
 - `costs.py` — price constants + the per-step cost/time printer; every script prints its cost.
 - `reconcile.py` — REAL cost from the billed-units spy log (`COSTLOG=1`).
 - `README.md` — the same steps in plain English.

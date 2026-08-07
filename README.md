@@ -26,6 +26,21 @@ background ambience and ducked music carry it. Cost: **about $2 per video.**
 python run.py "https://www.rollonfriday.com/news-content/some-story"
 ```
 
+**Re-running the same link.** Before it starts, `manager.py` checks whether you already
+made a video from this link. If so, it asks in plain English what to do:
+- **Start over** — wipe the output folder and rebuild from zero (full price).
+- **Repair** — keep last time's story, characters and narrator voice, scan for clips that
+  are **missing or broken**, and re-make only those, then rebuild the final video. Cheap
+  (~$0.25 per fixed clip) because everything good is reused.
+- **Just scan** — show what's OK / missing / broken and stop (free).
+
+Skip the questions with a flag (handy for automation):
+```bash
+python run.py "<url>" --scan      # only check the last run's health, build nothing
+python run.py "<url>" --repair    # fix missing/broken pieces only
+python run.py "<url>" --fresh      # wipe and rebuild from zero
+```
+
 `run.py` is the manager. It runs seven steps in order (and prints each step's cost
 and time, plus a total at the end):
 
@@ -74,7 +89,9 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 ```
 
 ## Files
-- `run.py` — manager (runs the whole link → final video pipeline; prints cost + time)
+- `run.py` — runner (runs the whole link → final video pipeline; prints cost + time)
+- `manager.py` — the run brain: detects a previous run of the same link, asks start-over vs.
+  repair vs. scan, health-checks every artifact, and wipes/keeps the folder accordingly
 - `scrape.py`, `analyze.py`, `gen_characters.py` — story → characters + portraits
 - `scene_writer.py`, `voice_maker.py`, `scene_clips.py`, `assemble.py` — script → narrator voice → scene clips → video
 - `costs.py` — price list + per-step cost/time printer
