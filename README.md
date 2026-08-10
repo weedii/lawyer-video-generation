@@ -31,14 +31,21 @@ made a video from this link. If so, it asks in plain English what to do:
 - **Start over** — wipe the output folder and rebuild from zero (full price).
 - **Repair** — keep last time's story, characters and narrator voice, scan for clips that
   are **missing or broken**, and re-make only those, then rebuild the final video. Cheap
-  (~$0.25 per fixed clip) because everything good is reused.
+  (~$0.29 per fixed clip) because everything good is reused.
 - **Just scan** — show what's OK / missing / broken and stop (free).
+- **Pick parts to redo** — choose specific scene(s) by number and re-make just those, even
+  if they aren't broken (e.g. a scene that came out wrong). For each pick you choose **clip
+  only** (re-animate the same picture, ~$0.21) or **image + clip** (make a new picture too,
+  ~$0.29). Everything else is untouched, then the final video is re-joined.
 
 Skip the questions with a flag (handy for automation):
 ```bash
-python run.py "<url>" --scan      # only check the last run's health, build nothing
-python run.py "<url>" --repair    # fix missing/broken pieces only
-python run.py "<url>" --fresh      # wipe and rebuild from zero
+python run.py "<url>" --scan            # only check the last run's health, build nothing
+python run.py "<url>" --repair          # fix missing/broken pieces only
+python run.py "<url>" --fresh            # wipe and rebuild from zero
+python run.py "<url>" --redo 6           # re-render just scene 6's clip (same picture)
+python run.py "<url>" --redo 3,6         # several at once
+python run.py "<url>" --redo-image 6     # re-make scene 6's picture AND clip
 ```
 
 `run.py` is the manager. It runs seven steps in order (and prints each step's cost

@@ -4,30 +4,34 @@ run.py is the list of 7 steps. This file is the brain that sits in front of it a
 answers one question: "we're about to build a video — should we start fresh, or is
 there a half-finished run we can just repair?"
 
-It does four things:
+It does five things:
   1. REMEMBER the last run (output/run_state.json: which link, when, how it went).
   2. DETECT the situation on start (empty folder? same link as last time? a different
      video sitting in the folder?).
-  3. ASK the user in plain English what they want (start over vs. repair vs. cancel).
+  3. ASK the user in plain English what they want (start over / repair / scan / redo).
   4. SCAN ("doctor") every file the last run made and say what is OK, MISSING or BROKEN —
      so REPAIR mode can re-make ONLY the broken/missing pieces and skip everything good.
+  5. REDO specific scenes the user picks by number (even ones that aren't broken), the clip
+     alone or the image + clip, and nothing else.
 
-Why repair is safe here: steps 2 (analyze) and 3 (scene_writer) are AI and give a
+Why repair/redo are safe here: steps 2 (analyze) and 3 (scene_writer) are AI and give a
 DIFFERENT story every time (different names, different scenes). Re-running them would
-throw away the portraits and clips that matched the OLD story. So repair NEVER re-runs
-them — it reuses the existing output/analysis.json (same story, same names, same voice)
-and only fills the gaps. The trick for "re-make only what's broken" is: the doctor
-DELETES broken files, then the normal steps (which already reuse whatever is on disk)
-naturally regenerate exactly those files and nothing else.
+throw away the portraits and clips that matched the OLD story. So repair/redo NEVER re-run
+them — they reuse the existing output/analysis.json (same story, same names, same voice)
+and only fill the gaps. The trick for "re-make only what's broken/picked": the doctor
+(repair) or the redo picker DELETES the target files, then the normal steps (which already
+reuse whatever is on disk) naturally regenerate exactly those files and nothing else.
 
-Costs: SCAN is free. REPAIR only pays for the few clips it re-makes (~$0.25 each) instead
-of a whole ~$2 rebuild. START OVER costs the full price, like a normal run.
+Costs: SCAN is free. REPAIR only pays for the few clips it re-makes (~$0.29 each), and REDO
+only for the scenes you pick (~$0.21 clip only, ~$0.29 image + clip), instead of a whole
+~$2 rebuild. START OVER costs the full price, like a normal run.
 """
 import os
 import json
 import time
 import shutil
 import subprocess
+import costs
 
 OUT_DIR = "output"
 ANALYSIS = os.path.join(OUT_DIR, "analysis.json")
@@ -43,6 +47,9 @@ MIN_CLIP_SECS = 1.0
 # image on Nano Banana 2 at 1K ($0.08). Used only to show the user an estimate before a
 # repair; the real cost is printed after the run.
 REPAIR_PER_CLIP = 0.29
+# Typical clip length (seconds) used ONLY for the pre-run redo estimate; the printed cost
+# after the run is the real one.
+REDO_CLIP_SECS = 8
 
 
 # --------------------------------------------------------------------------- files
@@ -208,6 +215,104 @@ def delete_broken(report: list) -> int:
     return n
 
 
+# --------------------------------------------------------------------------- redo specific parts
+
+def scene_list(data: dict) -> list:
+    """The scenes of the last run, each as (number, type, beat, who, one-line description),
+    1-based to match clip_01.mp4 ... — used to show the redo menu."""
+    scenes = (data.get("script") or {}).get("scenes", []) if data else []
+    rows = []
+    for i, sc in enumerate(scenes, 1):
+        who = ", ".join(sc.get("onscreen") or sc.get("characters", [])) or "—"
+        desc = (sc.get("narration") or sc.get("action") or "").strip()
+        rows.append((i, sc.get("type", "scene"), sc.get("beat", ""), who, desc[:60]))
+    return rows
+
+
+def parse_scene_numbers(raw: str, valid: set) -> list:
+    """Turn '3,6' (or '3 6') into a sorted list of valid scene numbers; junk is ignored."""
+    out = []
+    for tok in raw.replace(",", " ").split():
+        if tok.isdigit() and int(tok) in valid and int(tok) not in out:
+            out.append(int(tok))
+    return sorted(out)
+
+
+def _redo_files(scene_i: int, with_image: bool) -> list:
+    """Files to delete for one scene redo: the clip always; the composed still too if the
+    user wants a NEW picture (not just a re-animation of the same one)."""
+    files = [os.path.join(OUT_DIR, f"clip_{scene_i:02d}.mp4")]
+    if with_image:
+        files.append(os.path.join(OUT_DIR, f"scene_{scene_i:02d}.png"))
+    return files
+
+
+def _clip_cost() -> float:
+    return REDO_CLIP_SECS * costs.SEEDANCE_PRO_NOAUDIO_PER_SEC
+
+
+def _image_clip_cost() -> float:
+    return _clip_cost() + costs.NANO_BANANA_2_EDIT_PER_IMAGE
+
+
+def estimate_redo(targets: list) -> float:
+    """Rough $ for a set of redo targets (real cost is printed after the run)."""
+    return sum(_image_clip_cost() if t["with_image"] else _clip_cost() for t in targets)
+
+
+def apply_redo(targets: list) -> int:
+    """Delete EXACTLY the chosen files, so the resume-guarded steps rebuild only those and
+    nothing else is touched. Prints each deletion. Returns how many files were removed."""
+    n = 0
+    for t in targets:
+        for p in _redo_files(t["scene"], t["with_image"]):
+            if os.path.exists(p):
+                os.remove(p)
+                print(f"    removed {os.path.basename(p)} (will be rebuilt)")
+                n += 1
+    return n
+
+
+def redo_targets_from_flag(scene_str: str, with_image: bool, data: dict) -> list:
+    """Build redo targets from a --redo/--redo-image flag value like '3,6' (no questions)."""
+    valid = {i for i, *_ in scene_list(data)}
+    return [{"scene": i, "with_image": with_image}
+            for i in parse_scene_numbers(scene_str, valid)]
+
+
+def pick_redo_targets(data: dict) -> list:
+    """Interactive redo: show the scene list, ask which scene(s) to redo, then for each ask
+    how deep (clip only vs image + clip). Returns [{"scene": i, "with_image": bool}, ...],
+    or [] if the user picks nothing."""
+    rows = scene_list(data)
+    if not rows:
+        print("  No scenes found — nothing to redo.")
+        return []
+    print("\n  Scenes in the last run:")
+    for i, typ, beat, who, desc in rows:
+        print(f"    [{i}] {typ:9} {beat:12} {who}")
+        if desc:
+            print(f"         “{desc}”")
+    valid = {i for i, *_ in rows}
+    raw = input("\n  Which scene(s) do you want to redo? (e.g. 6 or 3,6) "
+                "— or press Enter to cancel: ").strip()
+    picks = parse_scene_numbers(raw, valid)
+    if not picks:
+        return []
+    targets = []
+    for i in picks:
+        print(f"\n  Scene {i} — how deep do you want to redo it?")
+        print(f"    [1] CLIP ONLY — keep the same picture, just re-animate the movement "
+              f"(~${_clip_cost():.2f}).")
+        print("        Use this when the picture is fine but the movement was wrong.")
+        print(f"    [2] IMAGE + CLIP — make a NEW picture, then animate it "
+              f"(~${_image_clip_cost():.2f}).")
+        print("        Use this when the picture itself is wrong.")
+        depth = _ask("    Type 1 or 2: ", {"1", "2"})
+        targets.append({"scene": i, "with_image": depth == "2"})
+    return targets
+
+
 # --------------------------------------------------------------------------- start folder
 
 # Files the user sets up ONCE and reuses across every video — a wipe must keep these.
@@ -272,7 +377,7 @@ def decide_mode(url: str, flag: str = "") -> str:
     the future automated pipeline. With no flag, it looks at the folder and, only when
     there IS something to protect, asks the user in plain English.
     """
-    if flag in ("fresh", "repair", "scan"):
+    if flag in ("fresh", "repair", "scan", "redo"):
         return flag
 
     # Nothing there yet -> just build it, no need to ask.
@@ -296,9 +401,13 @@ def decide_mode(url: str, flag: str = "") -> str:
         print("  [3] JUST SCAN (look, don't spend)")
         print("      Only show me what's OK, missing or broken from last time, then")
         print("      stop. Costs nothing.\n")
-        print("  [4] CANCEL — do nothing and quit.\n")
-        pick = _ask("  Type 1, 2, 3 or 4 and press Enter: ", {"1", "2", "3", "4"})
-        return {"1": "fresh", "2": "repair", "3": "scan", "4": "cancel"}[pick]
+        print("  [4] PICK PARTS TO REDO (fix specific scenes)")
+        print("      Choose one or more scenes by number and re-make just those — the")
+        print("      picture, the movement, or both. Everything else is kept. Use this")
+        print("      when a scene came out wrong even though it isn't broken.\n")
+        print("  [5] CANCEL — do nothing and quit.\n")
+        pick = _ask("  Type 1, 2, 3, 4 or 5 and press Enter: ", {"1", "2", "3", "4", "5"})
+        return {"1": "fresh", "2": "repair", "3": "scan", "4": "redo", "5": "cancel"}[pick]
 
     # Folder has a DIFFERENT video in it.
     print("\n" + "=" * 60)

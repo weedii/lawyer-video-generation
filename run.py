@@ -45,20 +45,40 @@ def step(number: str, title: str, script_args: list[str]):
 
 
 if __name__ == "__main__":
-    # Parse the command line: one URL plus optional --fresh / --repair / --scan.
-    # A flag skips the questions (useful for automation); a bare word is the URL.
+    # Parse the command line: one URL plus optional flags that skip the questions.
+    #   --fresh / --repair / --scan                whole-run modes
+    #   --redo 6        or --redo=3,6              re-render just those scene CLIPS
+    #   --redo-image 6  or --redo-image=3,6        re-make those scenes' IMAGE + clip
     flag = ""
+    redo_scenes = ""            # the "3,6" list from --redo / --redo-image
+    redo_with_image = False     # True only for --redo-image
     positional = []
-    for a in sys.argv[1:]:
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        a = args[i]
         if a in ("--fresh", "--repair", "--scan"):
             flag = a.lstrip("-")
+        elif a in ("--redo", "--redo-image"):
+            flag = "redo"
+            redo_with_image = (a == "--redo-image")
+            # the scene list is the next token (e.g. "--redo 6"); allow it to be missing
+            if i + 1 < len(args) and not args[i + 1].startswith("--"):
+                redo_scenes = args[i + 1]
+                i += 1
+        elif a.startswith("--redo=") or a.startswith("--redo-image="):
+            flag = "redo"
+            redo_with_image = a.startswith("--redo-image=")
+            redo_scenes = a.split("=", 1)[1]
         else:
             positional.append(a)
-    # The URL: given on the line, or (for --repair/--scan on an existing run) reused from
-    # the last run so you don't have to paste the same link again.
+        i += 1
+    # The URL: given on the line, or (for --repair/--scan/--redo on an existing run) reused
+    # from the last run so you don't have to paste the same link again.
     url = positional[0] if positional else manager.previous_url()
     if not url:
-        sys.exit('Usage: python run.py "<story-url>"  [--fresh | --repair | --scan]')
+        sys.exit('Usage: python run.py "<story-url>"  '
+                 '[--fresh | --repair | --scan | --redo N | --redo-image N]')
 
     # Ask the manager HOW to run: fresh build, repair the last run, just scan, or cancel.
     mode = manager.decide_mode(url, flag)
@@ -69,6 +89,48 @@ if __name__ == "__main__":
             manager.print_health(manager.health_check(manager.load_json(manager.ANALYSIS)))
         else:
             print("Cancelled — nothing was changed.")
+        sys.exit(0)
+
+    # REDO specific scenes: pick which (from the flag or by asking), delete just those files,
+    # and let the resume-guarded steps rebuild only them. Done BEFORE the clock so the time
+    # spent choosing isn't counted as run time.
+    if mode == "redo":
+        data = manager.load_json(manager.ANALYSIS)
+        if not data or not (data.get("script") or {}).get("scenes"):
+            sys.exit("No previous run found to redo. Build a video first (fresh run).")
+        # Where the picks come from: a flag (--redo 3,6) skips the questions; otherwise ask.
+        if redo_scenes:
+            targets = manager.redo_targets_from_flag(redo_scenes, redo_with_image, data)
+        else:
+            targets = manager.pick_redo_targets(data)
+        if not targets:
+            print("Nothing picked — nothing was changed.")
+            sys.exit(0)
+        picks = ", ".join(f"scene {t['scene']}"
+                          f"{' (new image + clip)' if t['with_image'] else ' (clip only)'}"
+                          for t in targets)
+        print(f"\nRedoing: {picks}")
+        print(f"Estimated cost: ~${manager.estimate_redo(targets):.2f}  "
+              f"(the real cost is printed at the end)")
+        run_start = time.time()
+        print("\nRemoving the chosen files so they get rebuilt ...")
+        manager.apply_redo(targets)
+        step("REDO 1/2", "Re-render the picked scene clip(s)", ["scene_clips.py"])
+        step("REDO 2/2", "Re-join everything into the final video", ["assemble.py"])
+        manager.save_state(url, "redo", manager.health_check(manager.load_json(manager.ANALYSIS)))
+        print("\n" + "=" * 55, flush=True)
+        print("  REDO DONE", flush=True)
+        print("=" * 55, flush=True)
+        print("Final video:      output/final_video.mp4", flush=True)
+        if os.environ.get("COSTLOG"):
+            subprocess.run([sys.executable, "reconcile.py"])
+        else:
+            try:
+                with open(os.path.join("output", "analysis.json")) as f:
+                    costs.print_summary(json.load(f))
+            except Exception as e:
+                print(f"(could not print cost summary: {e})", flush=True)
+        print(f"\nTotal redo time:  {costs.fmt_duration(time.time() - run_start)}", flush=True)
         sys.exit(0)
 
     # Start the clock so we can report how long the WHOLE run took.

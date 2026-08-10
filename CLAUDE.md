@@ -104,13 +104,17 @@ then a total cost table and the total run time at the end.
 run. If you already built this SAME link, it asks (plain English): **START OVER** (wipe +
 full rebuild), **REPAIR** (keep the last run's story + narrator voice, health-scan every
 artifact, delete the broken ones, and re-make ONLY the missing/broken clips + re-join —
-~$0.29/clip), or **SCAN** (print OK/missing/broken and stop, free). Flags skip the prompt
-for automation: `--fresh`, `--repair`, `--scan`. Repair deliberately SKIPS scrape/analyze/
-scene_writer (AI = a different story every run) and voice_maker (a new random voice) and
-reuses `output/analysis.json`. The "re-make only what's broken" trick: the doctor DELETES
-broken files, then the normal resume-guarded steps regenerate exactly those. A wipe keeps
-reusable brand assets (`output/look.cube`). Last run's summary is saved to
-`output/run_state.json`.
+~$0.29/clip), **SCAN** (print OK/missing/broken and stop, free), or **PICK PARTS TO REDO**
+(choose specific scene(s) by number and re-make just those even if not broken — CLIP ONLY
+re-animates the same still ~$0.21, or IMAGE + CLIP recomposes then animates ~$0.29). Flags
+skip the prompt for automation: `--fresh`, `--repair`, `--scan`, `--redo N`, `--redo-image N`
+(N can be a list like `3,6`). Repair and redo deliberately SKIP scrape/analyze/scene_writer
+(AI = a different story every run) and voice_maker (a new random voice) and reuse
+`output/analysis.json`. The "re-make only what's broken / picked" trick: the doctor (repair)
+or the redo picker DELETES the target files, then the normal resume-guarded steps regenerate
+exactly those and re-join. Redo touches ONLY the chosen files (clip = `clip_NN.mp4`, image =
+`scene_NN.png`); nothing else. A wipe keeps reusable brand assets (`output/look.cube`). Last
+run's summary is saved to `output/run_state.json`.
 
 | Step | Script | Model | Output | Cost |
 |------|--------|-------|--------|------|
