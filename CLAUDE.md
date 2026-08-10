@@ -150,6 +150,14 @@ reusable brand assets (`output/look.cube`). Last run's summary is saved to
 ## Rules learned (do not relearn the hard way)
 - Everything must be **vertical 9:16** (TikTok). Wide video stretches the character.
 - Cheap AI video keeps the face only with **tiny motion**. Big action breaks the face into a different person.
+- **Fine finger motion is poison** — Seedance turns "fingers drumming on a form" into "typing
+  on a keyboard" over a shot of a plain paper (the scene-6 bug). So `scene_writer.py` filters
+  the `action`/`shot` text (`sanitize_motion`), deterministically, before it reaches the video
+  model: **Tier 1** always strips drumming and finger-tapping; **Tier 2** strips a fine-hand
+  motion (type/write/sign/scroll/count/shuffle) only in the BAD context — on a bare flat
+  surface (paper/desk/table) with NO real device present ("types on a laptop" is kept, "types
+  on the paper" is stripped). The prompt also lists these as banned with good/bad examples, but
+  the code strip is the guarantee (never trust the model to obey). Each strip is logged.
 - **The narration voiceover carries the story; characters are seen, not heard.** No synced
   dialogue, no lip-sync — that is the deliberate design, not a limitation. (We use NO
   subtitles. Short **location cards** — a place name burned briefly over a new scene, Law &

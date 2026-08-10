@@ -338,6 +338,21 @@ FOR EACH SCENE also give:
   the lone protagonist and what they do while telling us the story (e.g. "sits on
   the cell bunk, forearms on knees, looking up into the camera"; "walks the empty
   courthouse corridor toward us") — mention ONLY the protagonist.
+- MOTION SAFETY — the video model can only render SIMPLE, WHOLE-BODY or WHOLE-HAND movement.
+  It badly mangles FINE FINGER motion, so the "action" (and "shot") must never call for it:
+    * NEVER write finger drumming or tapping — on anything. There is no good version of it.
+    * Fine hand motion (typing, writing, signing, scrolling, texting, counting, shuffling,
+      flipping pages) is ONLY allowed when a REAL device makes it obvious, and NEVER on a
+      bare paper or flat table — the model reads fingers moving on a flat surface as typing.
+      Good vs bad:
+        - BAD: "types on the paper / on the desk"   GOOD: "types on a laptop, screen glowing"
+        - BAD: "writes on the form, pen in close-up" GOOD: "closes the folder and pushes it away"
+        - BAD: "scrolls his phone lying on the desk" GOOD: "picks the phone up, reads the screen"
+        - BAD: "signs the document, hand in close-up" GOOD: "slides the signed page across the desk"
+        - BAD: "counts the cash on the table"        GOOD: "picks up the stack, drops it down"
+        - BAD: "shuffles the papers flat on the desk" GOOD: "gathers the papers, taps them upright in hand"
+    * Prefer big, clear beats the model CAN do: stand, sit, turn, walk, lean back, fold arms,
+      look up, push an object away, set something down. When in doubt, keep the hands still.
 - Every scene needs a "detail": ONE concrete object that instantly says WHERE we are —
   a brass nameplate, a gavel, a stack of tagged case files, a train window, a barred
   cell door. It must be an OBJECT, never a person, and something that genuinely belongs
@@ -375,6 +390,57 @@ Return ONLY valid JSON with exactly this shape:
 """
 
 
+# --- Motion safety: only hand the video model movement it can actually render -----------
+# Seedance (like any cheap image-to-video model) mangles FINE FINGER motion: it turned
+# "fingers drumming on the form" into "typing on a keyboard" over a shot of a plain paper
+# (the scene-6 bug). The prompt tells the writer to avoid it, but we do NOT trust that — we
+# STRIP the risky motion from the action/shot text here, so it can never reach the model.
+# Two tiers, matching the prompt's MOTION SAFETY section:
+#   Tier 1 — ALWAYS removed: drumming (any), and finger tapping. No legit use; always breaks.
+#   Tier 2 — removed only in the BAD CONTEXT: a fine-hand motion (type/write/sign/scroll/...)
+#            on a bare FLAT SURFACE (paper/table/desk) with NO real device present. "types on
+#            his laptop" is fine (a device is there to type on); "types on the paper" is not.
+# The motion words are ACTIVE verb forms only (types/typing, signs/signing), never bare or
+# past-participle forms — so an adjective like "the SIGNED page" or a noun like "a text" is
+# NOT mistaken for the motion. Better to miss a rare risky beat than to strip a good one.
+_DRUM_RE = re.compile(r"\bdrum(?:s|med|ming)?\b", re.I)
+_TAP_RE = re.compile(r"\btap(?:s|ped|ping)?\b", re.I)
+_FINGER_RE = re.compile(r"\bfingers?\b", re.I)
+_FINE_MOTION_RE = re.compile(
+    r"\b(?:types|typing|typed|writes|writing|scribbl(?:es|ing)|signs|signing|texts|texting|"
+    r"scrolls|scrolling|swipes|swiping|counts|counting|shuffl(?:es|ing)|flips|flipping|"
+    r"jots|jotting)\b", re.I)
+_FLAT_SURFACE_RE = re.compile(
+    r"\b(?:papers?|table|desk|counter|forms?|documents?|folder|pages?|sheets?)\b", re.I)
+_DEVICE_RE = re.compile(
+    r"\b(?:laptop|keyboard|computer|phone|smartphone|tablet|screen|monitor)\b", re.I)
+
+
+def _clause_is_risky(clause: str) -> bool:
+    """True if this one action clause describes movement the video model can't render cleanly."""
+    if _DRUM_RE.search(clause):                        # Tier 1: drumming — always out
+        return True
+    if _TAP_RE.search(clause) and _FINGER_RE.search(clause):   # Tier 1: FINGER tapping (not "taps a stack")
+        return True
+    # Tier 2: fine hand motion on a bare flat surface, with no real device to justify it.
+    return bool(_FINE_MOTION_RE.search(clause) and _FLAT_SURFACE_RE.search(clause)
+                and not _DEVICE_RE.search(clause))
+
+
+def sanitize_motion(text: str):
+    """Drop the risky clauses from an action/shot line; return (clean_text, [removed]).
+    Splits on commas/semicolons and keeps only the safe clauses, so 'stares at the seat, jaw
+    set, fingers drumming on the form' becomes 'stares at the seat, jaw set'."""
+    if not text:
+        return text, []
+    kept, removed = [], []
+    for part in re.split(r"\s*[;,]\s*", text):
+        if not part:
+            continue
+        (removed if _clause_is_risky(part) else kept).append(part)
+    return ", ".join(kept), removed
+
+
 def clean_scenes(script: dict, valid_names: list = None, lead: str = None) -> dict:
     """Keep only well-formed scenes and fill any missing fields, so the rest of
     the pipeline always gets clean, predictable data. Also enforce the 2-speaker
@@ -387,7 +453,7 @@ def clean_scenes(script: dict, valid_names: list = None, lead: str = None) -> di
     making the model use the exact cast names in the first place."""
     valid = {n.strip().lower() for n in valid_names} if valid_names else None
     cleaned = []
-    for sc in script.get("scenes", []):
+    for idx, sc in enumerate(script.get("scenes", []), 1):
         if not isinstance(sc, dict):
             continue
         stype = sc.get("type", "dialogue")
@@ -410,6 +476,15 @@ def clean_scenes(script: dict, valid_names: list = None, lead: str = None) -> di
             "narration": (sc.get("narration") or "").strip(),
             "dialogue": [],
         }
+        # Motion safety net: strip movements the video model can't render (drumming/tapping
+        # always; fine hand motion on a bare flat surface) from what it will animate — the
+        # action and the shot — so a risky beat can never reach Seedance. Logged so the run
+        # shows exactly what was removed and why.
+        for field in ("action", "shot"):
+            scene[field], removed = sanitize_motion(scene[field])
+            for r in removed:
+                print(f"  [motion filter] scene {idx} ({scene['beat']}): dropped \"{r}\" "
+                      f"(cheap AI mangles that movement)")
         if stype == "narration":
             if not scene["narration"]:
                 continue  # a narration scene with no voiceover is useless
