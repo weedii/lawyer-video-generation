@@ -1,19 +1,19 @@
-"""STEP C: Make one image for EVERY character found in the story.
+"""STEP C: Make one locked portrait for each character the SCRIPT actually uses.
 
-It reads the analysis file (from analyze.py), takes each character's
-ready-made image prompt, and generates one vertical image per character
-with fal.ai. It also saves a small index file so the next steps know which
-picture belongs to which character.
+It reads the analysis file (from analyze.py + scene_writer.py), and for every character
+who appears in a scene (speaking or silent on screen), plus the protagonist who narrates,
+generates one vertical portrait with fal.ai. Characters analyze invented but the script
+never uses are skipped, so we don't pay for faces that never appear. It also saves the
+image file name back into analysis.json so the next steps know which picture is whose.
 
 Usage:
     python gen_characters.py
 
-Reads:  output/analysis.json    (from analyze.py)
-Output: output/char_<name>.png  (one image per character)
-        It also writes the image file name back INTO analysis.json (each
-        character gets a "file" field), so everything stays in one place.
-Cost:   $0.08 per character image (Nano Banana 2, 1K) — every character, named or
-        hidden-identity, gets one real locked portrait.
+Reads:  output/analysis.json    (from analyze.py + scene_writer.py)
+Output: output/char_<name>.png  (one image per USED character)
+        Each character also gets a "file" field in analysis.json, so everything
+        stays in one place.
+Cost:   $0.08 per character image (Nano Banana 2, 1K) — named or hidden-identity alike.
 """
 import os
 import sys
@@ -137,14 +137,16 @@ def main():
     # Only draw a face for characters who ACTUALLY appear in the script — analyze
     # often invents extra people (a coroner, a witness) the script never uses, and
     # a portrait for someone who never appears is $0.08 wasted. This is why the
-    # pipeline writes the script BEFORE this step. Used = anyone listed in a scene,
-    # plus the first two named leads (they fill the narration establishing shots).
+    # pipeline writes the script BEFORE this step.
     scenes = (data.get("script") or {}).get("scenes", [])
     # "used" = anyone who SPEAKS (characters) OR is merely ON SCREEN (onscreen) in
     # any scene — silent reactors are visible too, so they also need a real face.
     used = {n for s in scenes for n in s.get("characters", [])}
     used.update(n for s in scenes for n in s.get("onscreen", []))
-    used.update([c["fictional_name"] for c in characters if not c.get("anonymous")][:2])
+    # Also guarantee the protagonist (first non-anonymous character), who narrates the whole
+    # video. Only the first one — an earlier version added the first TWO for old "establishing
+    # shots", which paid for the 2nd character even when the script never used them.
+    used.update([c["fictional_name"] for c in characters if not c.get("anonymous")][:1])
     if not scenes:                      # script not written yet (standalone run) -> do all
         used = {c["fictional_name"] for c in characters}
 

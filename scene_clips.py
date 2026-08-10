@@ -1111,7 +1111,8 @@ def main():
     setting = script.get("setting", "a law office")
 
     named = [c for c in data.get("characters", []) if not c.get("anonymous")]
-    main_names = [c["fictional_name"] for c in named[:2] if c.get("file")]
+    # The protagonist, used only as the narration fallback lead (main_names[0]).
+    main_names = [c["fictional_name"] for c in named[:1] if c.get("file")]
 
     # ONE voice for the whole video: the PROTAGONIST's first-person voiceover (memoir style).
     # Same pick as scene_writer.lead_name — the first non-anonymous character. Every scene,
