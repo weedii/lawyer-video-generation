@@ -180,8 +180,11 @@ ELEVEN_SFX_PER_SEC = 0.002
 # This is a rough upper-bound estimate just so a number prints.
 ELEVENLABS_PER_1K_CHARS = 0.30
 
-# OpenAI GPT-4.1 published rate, per 1,000,000 tokens. Still tiny (~$0.08/video)
-# next to the Kling clips. (gpt-4o-mini was 0.15/0.60 but too weak — see docs.)
+# OpenAI GPT-4.1 published rate, per 1,000,000 tokens. Still small (~$0.10-0.15/video for
+# analyze + script) next to the Seedance clips. openai_cost() bills the REAL tokens, so this
+# stays honest even when the scene writer rewrites the script (a leaked name, or fewer than
+# MIN_SCENES scenes) — each extra attempt just adds its real tokens to the total.
+# (gpt-4o-mini was 0.15/0.60 but too weak — see docs.)
 OPENAI_INPUT_PER_1M = 2.00    # $ per 1,000,000 input tokens
 OPENAI_OUTPUT_PER_1M = 8.00   # $ per 1,000,000 output tokens
 

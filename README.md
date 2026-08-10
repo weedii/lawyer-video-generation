@@ -48,11 +48,15 @@ and time, plus a total at the end):
 |------|--------|--------------|-------|------|
 | 1 | `scrape.py <url>` | Download story + comments | — | free |
 | 2 | `analyze.py` | Organize + invent fictional characters | OpenAI GPT-4.1 | ~$0.03 |
-| 3 | `scene_writer.py` | Write the scene script (7–9 scenes covering how the events happened; a first-person voiceover over each) | OpenAI GPT-4.1 | ~$0.03 |
+| 3 | `scene_writer.py` | Write the scene script (7–9 scenes covering how the events happened; a first-person voiceover over each) | OpenAI GPT-4.1 | ~$0.03–0.12* |
 | 4 | `gen_characters.py` | One locked vertical portrait per USED character (scene reference) | fal.ai Nano Banana 2 (1K) | $0.08 each |
 | 5 | `voice_maker.py` | Give the narrator a random voice for this video (others don't matter — never heard) | ElevenLabs voice IDs | free |
 | 6 | `scene_clips.py` | Compose each scene image, render one **silent** Seedance clip, lay the narrator's voiceover + ambience over it (no lip-sync) | Nano Banana 2 (1K) + Seedance 1.5 pro (silent) + ElevenLabs TTS | ~$0.026/sec Seedance + $0.08/image |
 | 7 | `assemble.py` | Join the clips + ambience + ducked music + location cards | ffmpeg (local) | free |
+
+\* The scene script is rewritten (another GPT call) if it leaks a real name **or comes back
+with fewer than 7 scenes** — the count is enforced in code, up to 4 tries — so a messy story
+can cost a bit more here. The exact per-run cost is always printed.
 
 ### Results (in `output/`)
 - `final_video.mp4` — the finished vertical microdrama
@@ -128,7 +132,8 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 
 ## Costs (estimates from provider pricing)
 - Scrape: free
-- Analyze + scene script (OpenAI GPT-4.1): ~$0.06 per story
+- Analyze + scene script (OpenAI GPT-4.1): ~$0.06–0.15 per story (the script is rewritten if
+  it leaks a real name or comes back under 7 scenes, so a messy story costs a little more)
 - Character portrait (Nano Banana 2, 1K): $0.08 each
 - Composed scene image (Nano Banana 2, 1K): $0.08 per scene
 - Scene clip — Seedance 1.5 pro **silent**: $0.026 per second

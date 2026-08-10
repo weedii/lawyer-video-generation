@@ -70,6 +70,13 @@ def lead_name(data: dict) -> str:
 #   each face gets. Four is where identity still holds.
 MAX_SPEAKERS = 3
 MAX_ONSCREEN = 4
+# The video MUST be a full short, not a teaser. GPT-4.1 ignores the "7-9 scenes" text on its
+# own and often returns 5, which makes a ~30s video (see the Nando's runs). So the count is
+# ENFORCED in code below: a script under MIN_SCENES is rejected and rewritten, exactly like a
+# leaked real name is. MAX_ATTEMPTS is bumped so a name-leaky story (which burns retries on
+# names) still gets at least one pass to grow the scene count.
+MIN_SCENES = 7          # hard floor — matches the 7-9 rule in the prompt
+MAX_ATTEMPTS = 4        # was 3; give the count check room after name corrections
 SYSTEM_PROMPT = """
 You write short vertical TikTok microdramas for an audience of young lawyers,
 based on a REAL legal news story. Write it as a first-person MEMOIR SHORT FILM.
@@ -167,13 +174,19 @@ INTRODUCE NEW FACES (so the viewer is never confused):
   first line or action — belt and braces on top of the pre-name. Never drop a brand-new
   face into a scene with no context.
 
-STRUCTURE (a real beginning, middle and end) — 7 to 9 SCENES total. Let the STORY
-decide how many: a simple story is a tight 7, a rich one with several events earns 9.
-Never pad with a scene the story doesn't need, and never starve a real event to save a
-scene — cover every beat the story genuinely has. AIM FOR A FULL SHORT, NOT A TEASER:
-the finished video should run roughly a minute to a minute and a half — never a 30-second
-fragment, and never a 2-minute-plus slog. If your draft has fewer than 7 scenes or skips
-past the real events in one line each, it is TOO THIN — add the missing beats.
+STRUCTURE (a real beginning, middle and end) — YOU MUST WRITE BETWEEN 7 AND 9 SCENES.
+This is a HARD REQUIREMENT, not a suggestion: **7 is the absolute MINIMUM and 9 is the
+maximum.** A script with 6 or fewer scenes is INVALID and will be REJECTED and sent back
+to you to redo — do not return one. Aim for 8. Let the STORY set the exact number inside
+7-9: a simple story is a tight 7, a rich one with several events earns 9. Never starve a
+real event to save a scene, and do not pad with empty filler either — if the story feels
+thin, that means you have SKIPPED real events (the method, the catch, the fallout), so add
+those, not filler. AIM FOR A FULL SHORT, NOT A TEASER: the finished video should run
+roughly a minute to a minute and a half — never a 30-second fragment.
+
+*** BEFORE YOU RESPOND: COUNT the scenes in your "scenes" array. If the count is less than
+7, you are NOT DONE — go back and add real scenes until you have at least 7. Only then
+output the JSON. ***
 - TELL THE WHOLE STORY, INCLUDING THE "HOW". This is the biggest failure to avoid: do
   NOT jump from "I did something" straight to "I was convicted." The middle MUST dramatize
   the real MECHANICS the article actually describes — HOW he pulled it off (the specific
@@ -516,8 +529,9 @@ def write_script(data: dict, story_body: str):
     total_cost = 0.0
     extra = ""          # banned-name correction for the next attempt
     name_extra = ""     # invented-name correction for the next attempt
+    count_extra = ""    # too-few-scenes correction for the next attempt
     script = {}
-    for attempt in range(3):
+    for attempt in range(MAX_ATTEMPTS):
         ban_note = ""
         if banned:
             ban_note = (
@@ -530,7 +544,7 @@ def write_script(data: dict, story_body: str):
         resp = client.chat.completions.create(
             model=MODEL,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT + ban_note + name_extra},
+                {"role": "system", "content": SYSTEM_PROMPT + ban_note + name_extra + count_extra},
                 {"role": "user", "content": user_content},
             ],
             response_format={"type": "json_object"},
@@ -544,8 +558,23 @@ def write_script(data: dict, story_body: str):
         script = clean_scenes(raw, valid_names, lead)         # safety net: drop any that slipped
 
         leaks = leaked_names(script, banned)
-        if not leaks and not unknown:
+        # Enforce the scene count in code — the prompt alone doesn't hold GPT to 7-9.
+        n_scenes = len(script.get("scenes", []))
+        too_few = n_scenes < MIN_SCENES
+        if not leaks and not unknown and not too_few:
+            # Passed every check — say so, so the log shows WHY this draft was accepted.
+            print(f"  Script accepted: {n_scenes} scenes (>= {MIN_SCENES}), no leaked or unknown names.")
             break
+        if too_few:
+            print(f"  Only {n_scenes} scenes (need at least {MIN_SCENES}); rewriting ...")
+            count_extra = (
+                f"\n\nSCENE COUNT ERROR — you wrote only {n_scenes} scenes. The MINIMUM is "
+                f"{MIN_SCENES} and the target is 7-9. This draft is REJECTED. Rewrite it with "
+                f"AT LEAST {MIN_SCENES} scenes: dramatize more of the REAL events as their own "
+                f"scenes — the method (how he did it), the moment it unravelled, who noticed and "
+                f"how they caught on, and the fallout — instead of skipping past them in one "
+                f"line. Do NOT add empty filler; add the real beats you left out."
+            )
         if unknown:
             print(f"  Used names not in the cast {unknown}; rewriting ...")
             name_extra = (
@@ -559,6 +588,13 @@ def write_script(data: dict, story_body: str):
                 f"\nYou previously leaked these — they are STILL banned: "
                 f"{', '.join(leaks)}. Replace each with the matching fictional character."
             )
+
+    # If it STILL came back short after every retry, we can't force GPT further — take what
+    # we have (a short video beats a crashed pipeline) but WARN loudly so it isn't missed.
+    final_n = len(script.get("scenes", []))
+    if final_n < MIN_SCENES:
+        print(f"  ⚠ WARNING: after {MAX_ATTEMPTS} tries the script still has only {final_n} "
+              f"scenes (wanted {MIN_SCENES}-9). The video will be short — re-run to try again.")
 
     return script, total_cost
 
