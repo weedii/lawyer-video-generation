@@ -299,7 +299,7 @@ run's summary is saved to `output/run_state.json`.
 ## Next steps (in order)
 1. Judge quality on a few videos; improve weak spots (narration tone, voice fit, image quality).
 2. Editing variety: reaction beats, zoom-ins, better music, maybe optional detail inserts back on.
-3. Cheaper/faster: fewer Nano images (cap cast / reuse composites). **Parallel clip renders — DONE:** `scene_clips.py` now composes the scene images serially (so the room anchor stays consistent) but fires all the Seedance clips at once, up to `MAX_PARALLEL_RENDERS` (default 6, override via the env var) — a 9-scene render dropped from ~23 min to about the length of the slowest single clip. Same cost, just concurrent. The `_video_jobs.json` crash-recovery store is lock-guarded so the parallel renders can't race on it.
+3. Cheaper/faster: fewer Nano images (cap cast / reuse composites). **Parallel clip renders — DONE:** `scene_clips.py` now composes the scene images serially (so the room anchor stays consistent) but fires all the Seedance clips at once, up to `MAX_PARALLEL_RENDERS` (default 9 = the max scene count, so all clips render in ONE wave; override via the env var) — a 9-scene render dropped from ~23 min to about the length of the slowest single clip. Same cost, just concurrent. The `_video_jobs.json` crash-recovery store is lock-guarded so the parallel renders can't race on it.
 4. Once quality is reliably good → full automation (see below).
 
 ---

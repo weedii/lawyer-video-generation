@@ -159,7 +159,7 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 ## Next improvements
 - Editing variety: reaction beats, zoom-ins, better music, optional detail inserts back on.
 - Cheaper: fewer Nano images (cap cast, reuse composites). Images are now the biggest single line, so reuse pays more than it used to.
-- Faster: **done** — the Seedance clips now render in parallel (up to `MAX_PARALLEL_RENDERS`, default 6), so a full render takes about as long as the slowest single clip instead of the sum of all of them.
+- Faster: **done** — the Seedance clips now render in parallel (up to `MAX_PARALLEL_RENDERS`, default 9 so a whole 7–9 scene video renders in one wave), so a full render takes about as long as the slowest single clip instead of the sum of all of them.
 
 ## Final vision (later)
 Fully automated pipeline: scrape sources → score stories (good vs. bad) →

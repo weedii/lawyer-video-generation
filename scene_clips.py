@@ -117,10 +117,11 @@ VIDEO_ASPECT = "9:16"
 # How many Seedance clips to render AT THE SAME TIME. Each clip is an independent fal job
 # (submit, then poll), so they can all run in parallel instead of one after another — the old
 # serial loop is why a 9-scene video's render step took ~23 minutes; in parallel it takes about
-# as long as the single slowest clip (~2-3 min). We cap the number in flight so we don't hammer
-# fal's queue; raise it for a bigger fleet or lower it to 1 (fully serial) if fal rate-limits.
+# as long as the single slowest clip (~2-3 min). The default is 9 because a video is 7-9 scenes,
+# so every clip renders in ONE wave (a cap of 6 left 2 clips waiting for a second round, which
+# roughly doubled the render time). Lower it to 1 (fully serial) if fal ever rate-limits.
 # Override with the MAX_PARALLEL_RENDERS env var without touching the code.
-MAX_PARALLEL_RENDERS = int(os.getenv("MAX_PARALLEL_RENDERS", "6"))
+MAX_PARALLEL_RENDERS = int(os.getenv("MAX_PARALLEL_RENDERS", "9"))
 
 # ONE shared visual look, dropped into EVERY prompt — the character sheet, the composed
 # scene image, and every Seedance clip. Reusing the exact same palette/grain/lens wording is
