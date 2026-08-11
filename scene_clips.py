@@ -1,4 +1,4 @@
-"""STAGE 2 - STEP 3: Make one cinematic CLIP per SCENE (memoir VOICEOVER pipeline).
+"""Render one cinematic CLIP per SCENE — the VIDEO step (memoir VOICEOVER pipeline).
 
 The whole video is a first-person MEMOIR: ONE voice — the protagonist's — narrates
 every scene, over cinematic silent footage. There is NO synced character dialogue and
@@ -13,27 +13,29 @@ composing reverse angles). Every scene, dialogue or narration, is built the same
      (for dialogue) silently mouth their lines; the protagonist in narration is
      contemplative, mouth closed. Silent = the cheaper $0.026/s rate and nothing to
      lip-sync.
-  3. Lay the LEAD's first-person VOICEOVER for that scene on top (ElevenLabs TTS in the
-     lead's one fixed voice). No sync — the picture is trimmed to the voice length.
+  3. Lay this scene's VOICEOVER on top. The voiceover was MADE in the previous step
+     (audio_maker) and is recorded on the scene as sc["vo_file"]/["vo_seconds"]; here we
+     just read it, size the video to it, and mux it over the silent clip (no sync).
 
-Each scene is one clip (a "beat"); a NEW location also gets a short silent detail
-insert. The editor (assemble.py) joins the beats with a continuous ambient bed, ducked
-music and location cards. One voice across the whole film = perfect voice consistency,
-zero lip-sync risk.
+So this step only pays for the VIDEO: Seedance (the silent clips) and Nano Banana 2 (the
+composed scene images). The voiceover, ambience beds and music are all made and paid for
+in audio_maker (step 6); the editor (assemble.py) later joins the beats with those beds,
+ducked music and location cards. One voice across the whole film = perfect voice
+consistency, zero lip-sync risk.
 
 Why Seedance: it holds our AI-invented faces (Veo's likeness filter refused them on
 ~half of clips), runs on fal's crash-safe queue, and is cheap — and here we only ever
 use its SILENT tier.
 
 Usage:
-    python scene_clips.py
+    python scene_clips.py     (run audio_maker.py first, so the voiceovers exist)
 
-Reads:  output/analysis.json   (characters w/ portraits + voice_id, script scenes)
-Output: output/clip_XX.mp4 (one per scene) + insert_XX.mp4 (detail beats); writes
-        each scene's ordered scene["beats"] list + scene["ambient"] bed.
+Reads:  output/analysis.json   (characters w/ portraits, script scenes, per-scene vo_file)
+        + output/vo_XX.mp3 (the voiceovers made by audio_maker)
+Output: output/clip_XX.mp4 (one per scene); writes each scene's ordered scene["beats"] list.
 Cost:   Seedance 1.5 pro (fal) — $0.026/s at 720p SILENT (every scene clip + detail
-        inserts) + ElevenLabs TTS (the lead voiceover, per character) + $0.08 per
-        composed scene image (Nano Banana 2, 1K) + ~$0.002/s ambient beds. No lip-sync.
+        inserts) + $0.08 per composed scene image (Nano Banana 2, 1K). The audio cost lives
+        in audio_maker. No lip-sync.
 """
 import os
 import sys
@@ -1122,24 +1124,17 @@ def main():
                       if not c.get("anonymous")), None) or (main_names[0] if main_names else None)
     lead_c = chars_by_name.get(lead_name, {})
 
+    # All audio (voiceover, ambience, music) was made in the previous step (audio_maker) and
+    # is recorded on each scene: sc["vo_file"]/["vo_seconds"] for the voiceover, sc["ambient"]
+    # for the room bed. This step only renders the SILENT videos and lays that voiceover over
+    # them, so the only paid work here is Seedance (video) + Nano Banana 2 (scene images).
     scene_video_seconds = 0.0   # Seedance SILENT scene clips ($0.026/s — every clip is silent now)
     detail_video_seconds = 0.0  # Seedance seconds for silent detail inserts ($0.026/s, no audio)
-    tts_chars = 0               # ElevenLabs TTS characters (the lead's voiceover, one voice)
-    ambient_seconds = 0.0   # ElevenLabs Sound-Effects seconds (ambient beds + music)
     scene_images = 0        # composed images we paid for (scene composites + details)
     location_ref = {}       # setting -> first image made there (keep the room identical)
     compose_cache = {}      # (same people, same place) -> reuse that image (no re-pay)
     coverage_cache = {}     # (same people, same place) -> reuse the angle set (no re-pay)
-    ambient_by_loc = {}     # setting -> looping ambient bed made there (reuse, no re-pay)
     detail_by_loc = {}      # setting -> detail insert beat made there (reuse, no re-pay)
-
-    # ONE looping underscore for the whole video (see make_music). Reused every run; the
-    # editor loops and ducks it under the dialogue. A failure just means no music.
-    music_path = os.path.join(OUT_DIR, "music.mp3")
-    if os.path.exists(music_path):
-        print("    (reusing music bed music.mp3 — already on disk, $0)")
-    else:
-        ambient_seconds += make_music(music_path)
 
     print(f"Rendering {len(scenes)} scenes ...")
 
@@ -1177,29 +1172,6 @@ def main():
                      for n in names]
 
         loc_key = sc_setting.strip().lower()
-
-        # One looping ambient bed per unique location (reused across its scenes so
-        # we only pay once). The editor lays this under the whole scene so the
-        # audio never blinks at a cut. A failed bed just means no bed for that room.
-        amb_file = ambient_by_loc.get(loc_key)
-        if amb_file is None:
-            amb_name = f"amb_{slug(loc_key)[:40] or 'room'}.mp3"
-            amb_path = os.path.join(OUT_DIR, amb_name)
-            # Resume guard: if a previous run already made this room's bed, reuse the
-            # file for free instead of re-paying ElevenLabs.
-            if os.path.exists(amb_path):
-                amb_file = amb_name
-                print(f"    (reusing ambient bed {amb_name} — already on disk, $0)")
-            else:
-                # Use the scene's ambience description (party chatter, train rumble) so the
-                # bed is characterful, not a generic hum. Falls back to the setting text.
-                amb_desc = (sc.get("ambience") or "").strip() or sc_setting
-                secs = make_ambient(amb_desc, amb_path)
-                amb_file = amb_name if secs > 0 else ""
-                ambient_seconds += secs
-            ambient_by_loc[loc_key] = amb_file
-        if amb_file:
-            sc["ambient"] = amb_file
 
         # Compose the scene image(s). We do NOT reuse a previous clip's last frame —
         # that frame is mid-talk, which makes Seedance continue the wrong speaker. If the
@@ -1308,11 +1280,11 @@ def main():
                 print(f"  [{i}] {sc.get('type','scene').upper()} [{who}] -> {clip_name} (DRAFT)")
             continue
 
-        # 1) The lead's voiceover for THIS scene (first person). One voice for the whole video.
-        vo_text = (sc.get("narration") or "").strip()
-        dub = os.path.join(OUT_DIR, f"_dub_{i:02d}.mp3")
-        vo_secs, vo_chars = tts(lead_c.get("voice_id", ""), vo_text, dub) if vo_text else (0.0, 0)
-        tts_chars += vo_chars
+        # 1) The voiceover for THIS scene was already made by audio_maker (step 6). Read its
+        #    file and length so we can size the video to it and lay it over the silent clip.
+        vo_file = sc.get("vo_file", "")
+        vo_path = os.path.join(OUT_DIR, vo_file) if vo_file else ""
+        vo_secs = sc.get("vo_seconds", 0.0) if vo_path and os.path.exists(vo_path) else 0.0
 
         # 2) Render the SILENT Seedance clip, sized to cover the voiceover (a touch longer so
         #    the VO is never clipped). No-audio = half price and nothing to lip-sync.
@@ -1324,41 +1296,43 @@ def main():
             continue
         scene_video_seconds += secs
 
-        # 3) Lay the voiceover over the silent clip (NO lip-sync). -shortest trims the picture
-        #    to the voice, so the finished clip is exactly as long as the narration.
+        # 3) Lay the pre-made voiceover over the silent clip (NO lip-sync). -shortest trims the
+        #    picture to the voice, so the finished clip is exactly as long as the narration.
+        #    The voiceover file is kept (it's a step output), only the temp video is removed.
         if vo_secs > 0:
-            _mux_audio(src, dub, clip_path)
+            _mux_audio(src, vo_path, clip_path)
         else:
-            os.replace(src, clip_path)             # no VO text -> keep the silent clip as-is
-        for f in (src, dub):
-            if os.path.exists(f):
-                os.remove(f)
+            os.replace(src, clip_path)             # no voiceover -> keep the silent clip as-is
+        if os.path.exists(src):
+            os.remove(src)
         sc["beats"] = insert_beats + [beat]
+        vo_note = f" over {vo_secs:.1f}s voiceover" if vo_secs > 0 else " (no voiceover)"
         print(f"  [{i}] {sc.get('type','scene').upper()} [{who}] -> {clip_name} "
-              f"(silent {dur} + VO){' + detail' if insert_beats else ''}"
+              f"(silent {dur}{vo_note}){' + detail' if insert_beats else ''}"
               f"{'  [image: PRO fallback, $0.15]' if used_pro_fallback else ''}")
 
-    # --- Cost: SILENT Seedance clips + the lead's voiceover TTS + sound + images ---------
-    # Every scene clip is now SILENT (no audio = the cheaper $0.026/s rate), and the ONLY
-    # voice is the lead's voiceover (ElevenLabs TTS, per character). No lip-sync models at
-    # all, so no Sync 2.0 / LatentSync line any more.
+    # --- Cost: this step pays for TWO things only (the audio was paid in step 6):
+    #   1) fal Seedance      - the silent scene videos ($0.026/s, half price with no audio)
+    #   2) fal Nano Banana 2 - the composed scene images ($0.08 each; Pro fallback tops up)
     _, silent_rate = costs.seedance_rates()
     scene_cost = scene_video_seconds * silent_rate
     detail_cost = detail_video_seconds * silent_rate
-    tts_cost = tts_chars / 1000 * costs.ELEVEN_TTS_PER_1K_CHARS
-    sfx_cost = ambient_seconds * costs.ELEVEN_SFX_PER_SEC                   # ambient beds + music
-    # Images: every composed image is counted once at the cheap rate; each one that had to
-    # fall back to Pro (non-pro returned nothing, so non-pro billed $0) is topped up by the
-    # price gap so its true cost is Pro's rate, not the cheap one.
+    # Images: every composed image is counted at the NB2 rate; each one that fell back to Pro
+    # (NB2 returned nothing, so NB2 billed $0) is topped up by the gap so its true cost is Pro's.
     image_cost = (scene_images * costs.NANO_BANANA_2_EDIT_PER_IMAGE
                   + _pro_fallbacks * (costs.NANO_BANANA_PRO_EDIT_PER_IMAGE
                                       - costs.NANO_BANANA_2_EDIT_PER_IMAGE))
-    clip_cost = scene_cost + detail_cost + tts_cost + sfx_cost + image_cost
-    costs.record(data, "clips",
-                 f"Scenes - Seedance SILENT ({scene_video_seconds:.0f}s) + detail inserts "
-                 f"({detail_video_seconds:.0f}s) + VO TTS ({tts_chars} chars) + "
-                 f"{scene_images} images + {ambient_seconds:.0f}s sound",
-                 clip_cost)
+    video_cost = scene_cost + detail_cost + image_cost
+
+    # Record each piece under its OWN key so the final table lists them one by one.
+    fb_note = f" (incl. {_pro_fallbacks} Pro fallback)" if _pro_fallbacks else ""
+    costs.record(data, "scene_video",
+                 f"Scene videos - fal Seedance silent ({scene_video_seconds:.0f} seconds)", scene_cost)
+    costs.record(data, "scene_images",
+                 f"Scene images - fal Nano Banana 2 ({scene_images} images){fb_note}", image_cost)
+    if detail_cost:
+        costs.record(data, "detail_video",
+                     f"Detail inserts - fal Seedance silent ({detail_video_seconds:.0f} seconds)", detail_cost)
 
     with open(analysis_path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -1366,9 +1340,17 @@ def main():
     n_inserts = sum(1 for v in detail_by_loc.values() if v)
     fb = f", {_pro_fallbacks} Pro fallback" + ("s" if _pro_fallbacks != 1 else "") if _pro_fallbacks else ""
     print(f"\nUpdated output/analysis.json with the scene beats. "
-          f"({scene_images} images{fb}, {len(ambient_by_loc)} ambient beds, {n_inserts} detail inserts)")
-    costs.show(f"{len(scenes)} scenes (Seedance silent {scene_video_seconds:.0f}s + VO "
-               f"{tts_chars} TTS chars + {scene_images} images + sound)", clip_cost)
+          f"({scene_images} images{fb}, {n_inserts} detail inserts)")
+    # Print each paid piece for this step, so nothing is hidden inside one number.
+    print("\n  Video cost — each paid piece:")
+    print(f"    Scene videos    (fal Seedance, silent): {scene_video_seconds:.0f} seconds "
+          f"x ${silent_rate}/second = ${scene_cost:.4f}")
+    print(f"    Scene images    (fal Nano Banana 2):    {scene_images} images "
+          f"x ${costs.NANO_BANANA_2_EDIT_PER_IMAGE}/image = ${image_cost:.4f}{fb_note}")
+    if detail_cost:
+        print(f"    Detail inserts  (fal Seedance, silent): {detail_video_seconds:.0f} seconds "
+              f"x ${silent_rate}/second = ${detail_cost:.4f}")
+    costs.show(f"Video total ({len(scenes)} scenes: Seedance video + Nano Banana images)", video_cost)
 
 
 if __name__ == "__main__":

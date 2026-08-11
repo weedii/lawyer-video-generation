@@ -48,7 +48,7 @@ python run.py "<url>" --redo 3,6         # several at once
 python run.py "<url>" --redo-image 6     # re-make scene 6's picture AND clip
 ```
 
-`run.py` is the manager. It runs seven steps in order (and prints each step's cost
+`run.py` is the manager. It runs eight steps in order (and prints each step's cost
 and time, plus a total at the end):
 
 | Step | Script | What it does | Model | Cost |
@@ -57,9 +57,10 @@ and time, plus a total at the end):
 | 2 | `analyze.py` | Organize + invent fictional characters | OpenAI GPT-4.1 | ~$0.03 |
 | 3 | `scene_writer.py` | Write the scene script (7–9 scenes covering how the events happened; a first-person voiceover over each) | OpenAI GPT-4.1 | ~$0.03–0.12* |
 | 4 | `gen_characters.py` | One locked vertical portrait per USED character (scene reference) | fal.ai Nano Banana 2 (1K) | $0.08 each |
-| 5 | `voice_maker.py` | Give the narrator a random voice for this video (others don't matter — never heard) | ElevenLabs voice IDs | free |
-| 6 | `scene_clips.py` | Compose each scene image, render one **silent** Seedance clip, lay the narrator's voiceover + ambience over it (no lip-sync) | Nano Banana 2 (1K) + Seedance 1.5 pro (silent) + ElevenLabs TTS | ~$0.026/sec Seedance + $0.08/image |
-| 7 | `assemble.py` | Join the clips + ambience + ducked music + location cards | ffmpeg (local) | free |
+| 5 | `voice_maker.py` | Assign each character a voice (and pick the random narrator voice) — no audio made yet | ElevenLabs voice IDs | free |
+| 6 | `audio_maker.py` | Make **all** the audio: the narrator voiceover per scene + one ambience bed per location + one music bed | ElevenLabs speech + sound | ~$0.10/1k chars + ~$0.002/sec |
+| 7 | `scene_clips.py` | Compose each scene image, render one **silent** Seedance clip, lay the voiceover (made in step 6) over it (no lip-sync) | Nano Banana 2 (1K) + Seedance 1.5 pro (silent) | ~$0.026/sec Seedance + $0.08/image |
+| 8 | `assemble.py` | Join the clips + ambience + ducked music + location cards | ffmpeg (local) | free |
 
 \* The scene script is rewritten (another GPT call) if it leaks a real name **or comes back
 with fewer than 7 scenes** — the count is enforced in code, up to 4 tries — so a messy story
@@ -104,8 +105,10 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 - `manager.py` — the run brain: detects a previous run of the same link, asks start-over vs.
   repair vs. scan, health-checks every artifact, and wipes/keeps the folder accordingly
 - `scrape.py`, `analyze.py`, `gen_characters.py` — story → characters + portraits
-- `scene_writer.py`, `voice_maker.py`, `scene_clips.py`, `assemble.py` — script → narrator voice → scene clips → video
-- `costs.py` — price list + per-step cost/time printer
+- `scene_writer.py`, `voice_maker.py`, `audio_maker.py`, `scene_clips.py`, `assemble.py` — script → assign voices → make all audio → scene clips → video
+- `costs.py` — price list + per-step cost/time printer (step 6 prints each paid piece —
+  fal Seedance video, fal Nano Banana 2 images, ElevenLabs voice, ElevenLabs sound —
+  separately, and the final cost table lists them one by one)
 - `costlog.py`, `reconcile.py`, `sitecustomize.py` — cost spy: with `COSTLOG=1` set, log every API call and compute the REAL cost from actual billed units
 - `requirements.txt` — the Python libraries to install
 - `.env` — API keys (ignored by git)

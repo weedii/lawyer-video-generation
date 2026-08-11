@@ -220,7 +220,13 @@ def show(label: str, amount: float):
 # Each pipeline step records its real cost into analysis.json (under "costs"),
 # keyed by step so re-running a step OVERWRITES its entry instead of double
 # counting. run.py reads it at the end and prints the breakdown + grand total.
-_SUMMARY_ORDER = ["analyze", "images", "script", "voices", "clips"]
+# One key per PAID thing, so the final table lists each on its own line (never lumped):
+# audio_maker (step 6) records tts + sound (ElevenLabs); scene_clips (step 7) records
+# scene_video + scene_images (fal). The old combined "clips" row is gone.
+_SUMMARY_ORDER = ["analyze", "script", "images", "voices",
+                  "tts", "sound",                          # step 6: audio (ElevenLabs)
+                  "scene_images", "scene_video", "detail_video",   # step 7: video (fal)
+                  "clips"]   # "clips" = legacy combined key from old runs (still printed if present)
 
 
 def record(data: dict, key: str, label: str, amount: float):

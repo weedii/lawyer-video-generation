@@ -9,8 +9,8 @@ account, matched to the lead's gender — so the channel doesn't sound like the 
 person every time (NARRATOR_RANDOM). Set NARRATOR_RANDOM = False and NARRATOR_VOICE
 to a fixed ID to pin one instead.
 
-No audio is generated here (scene_clips.py does the TTS voiceover), so this step is
-effectively free — it only listens to the account's voice list and writes voice_ids.
+No audio is generated here (audio_maker.py does the TTS voiceover in the next step), so
+this step is effectively free — it only listens to the account's voice list and writes voice_ids.
 
 Usage:
     python voice_maker.py

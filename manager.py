@@ -1,6 +1,6 @@
 """THE RUN MANAGER — decides HOW a run should go, so run.py stays simple.
 
-run.py is the list of 7 steps. This file is the brain that sits in front of it and
+run.py is the list of 8 steps. This file is the brain that sits in front of it and
 answers one question: "we're about to build a video — should we start fresh, or is
 there a half-finished run we can just repair?"
 

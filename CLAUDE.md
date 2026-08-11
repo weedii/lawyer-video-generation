@@ -97,7 +97,7 @@ The video is a first-person **memoir told by one narrator** over cinematic foota
 Run from the project root with the venv activated (`source .venv/bin/activate`), then use `python`.
 
 One command does everything: `python run.py "<story-url>"` → `output/final_video.mp4`.
-`run.py` is the runner; it runs 7 steps in order and prints each step's cost AND time,
+`run.py` is the runner; it runs 8 steps in order and prints each step's cost AND time,
 then a total cost table and the total run time at the end.
 
 **Re-runs are managed (`manager.py`).** Before the steps, `run.py` asks `manager.py` how to
@@ -122,15 +122,22 @@ run's summary is saved to `output/run_state.json`.
 | 2. Analyze + invent characters | `analyze.py` | OpenAI GPT-4.1 | `analysis.json` + `.md` | ~$0.03 |
 | 3. Scene script (memoir VO) | `scene_writer.py` | OpenAI GPT-4.1 | adds `script.scenes` to analysis.json | ~$0.03–0.12 (rewrites if names leak or <7 scenes) |
 | 4. Character portraits | `gen_characters.py` | Nano Banana 2 (1K) | `char_*.png` (locked refs) — only for characters the script USES | $0.08 each |
-| 5. Voices | `voice_maker.py` | assigns each character a voice_id; **narrator = a RANDOM voice per video** | voice_id on every speaker + the narrating lead | free |
-| 6. Scene clips | `scene_clips.py` | Nano Banana 2 compose + **Seedance 1.5 pro SILENT** + ElevenLabs TTS voiceover + ambience | `clip_*.mp4` | ~$0.026/s Seedance + $0.08/image |
-| 7. Assemble | `assemble.py` | ffmpeg (local) — joins clips, lays ambience + ducked music + location cards | `final_video.mp4` | free |
+| 5. Voices | `voice_maker.py` | assigns each character a voice_id; **narrator = a RANDOM voice per video** (no audio made) | voice_id on every speaker + the narrating lead | free |
+| 6. Audio | `audio_maker.py` | **ElevenLabs** — voiceover per scene (`vo_*.mp3`) + ambience bed per location (`amb_*.mp3`) + music (`music.mp3`) | audio files + `vo_file`/`vo_seconds`/`ambient` on each scene | ~$0.10/1k chars speech + ~$0.002/s sound |
+| 7. Scene clips | `scene_clips.py` | Nano Banana 2 compose + **Seedance 1.5 pro SILENT**, then mux the step-6 voiceover over the silent clip | `clip_*.mp4` | ~$0.026/s Seedance + $0.08/image |
+| 8. Assemble | `assemble.py` | ffmpeg (local) — joins clips, lays ambience + ducked music + location cards | `final_video.mp4` | free |
 
-- **Every scene is built the same way** (`scene_clips.py`): compose ONE image of the on-screen
-  cast (`nano-banana-2/edit`) → render ONE **silent** Seedance clip → TTS the lead's
-  voiceover for that scene → mux the voiceover over the silent clip (no lip-sync; the picture
-  is trimmed to the voice length). Narration scenes are the lone lead, contemplative, mouth
-  closed. Dialogue scenes show the cast acting silently.
+- **Audio is its OWN step now** (`audio_maker.py`, step 6): all ElevenLabs work — the per-scene
+  voiceover (`vo_NN.mp3`), the per-location ambience beds (`amb_*.mp3`) and the music bed — is
+  made and PAID here, in one place, so the ElevenLabs cost is printed on its own instead of
+  being buried inside the clip step. Each scene gets `vo_file`/`vo_seconds`/`vo_chars` and
+  `ambient` written onto it.
+- **Every scene is built the same way** (`scene_clips.py`, step 7): compose ONE image of the
+  on-screen cast (`nano-banana-2/edit`) → render ONE **silent** Seedance clip → mux the
+  voiceover ALREADY MADE in step 6 over the silent clip (no lip-sync; the picture is trimmed to
+  the voice length). So this step pays only for Seedance video + Nano Banana images. Narration
+  scenes are the lone lead, contemplative, mouth closed. Dialogue scenes show the cast acting
+  silently.
 - **Character consistency:** one locked Nano portrait per character, reused as a reference
   into `nano-banana-2/edit` for every scene image. A per-location anchor keeps the room
   identical when the cast changes.
@@ -148,6 +155,12 @@ run's summary is saved to `output/run_state.json`.
   voiceover + sane length), delete broken files so the steps rebuild them, wipe/keep the
   folder, and save `run_state.json`.
 - `costs.py` — price constants + the per-step cost/time printer; every script prints its cost.
+  Step 6 (`scene_clips.py`) prints EACH paid piece on its own line — fal Seedance (video),
+  fal Nano Banana 2 (scene images), ElevenLabs TTS (voiceover), ElevenLabs sound (ambience +
+  music) — and records each under its own key, so the final "COST OF THIS VIDEO" table lists
+  them separately instead of lumping them into one "clips" number. All prices web-verified
+  (OpenAI $2/$8 per 1M; NB2 $0.08/1K; Seedance silent $0.026/s; ElevenLabs TTS $0.10/1k,
+  sound $0.002/s).
 - `reconcile.py` — REAL cost from the billed-units spy log (`COSTLOG=1`).
 - `README.md` — the same steps in plain English.
 
@@ -265,9 +278,10 @@ run's summary is saved to `output/run_state.json`.
   rewritten, exactly like a leaked real name — up to `MAX_ATTEMPTS` (4) tries, then a loud
   warning if it's still short. Each scene has a
   first-person voiceover, plus per-scene `ambience`, `detail`, `time_jump`. `voice_maker.py`
-  gives the narrator a random gender-matched voice. `scene_clips.py` composes each scene image,
-  renders ONE silent Seedance clip, and muxes the lead's voiceover over it. `assemble.py` joins
-  the clips with the ambience bed, ducked music and location cards.
+  gives the narrator a random gender-matched voice. `audio_maker.py` makes ALL the audio
+  (voiceover + ambience + music) and prints the ElevenLabs cost on its own. `scene_clips.py`
+  composes each scene image, renders ONE silent Seedance clip, and muxes the pre-made voiceover
+  over it. `assemble.py` joins the clips with the ambience bed, ducked music and location cards.
 - Cost tiers: Seedance 1.5 pro i2v **$0.026/s** (silent, 720p); ElevenLabs TTS **$0.10/1k
   chars**; ElevenLabs sound-generation **~$0.002/s**; Nano Banana 2 compose/portrait **$0.08/image at 1K**.
 - Each script prints its **cost AND run time**; `run.py` prints the total cost table + total run time.

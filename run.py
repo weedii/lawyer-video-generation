@@ -6,9 +6,10 @@ You give it a story link. It runs the other scripts in order:
     3. scene_writer.py    -> write the SCENE script (who is in each scene + dialogue)
     4. gen_characters.py  -> make one locked portrait per USED character (only the
                              characters the script actually uses, to skip wasted renders)
-    5. voice_maker.py     -> clone each character's voice + narrator voiceover
-    6. scene_clips.py     -> render one cinematic SCENE clip per beat (Seedance)
-    7. assemble.py        -> join the scenes into the final video
+    5. voice_maker.py     -> assign each character a voice (and pick the random narrator voice)
+    6. audio_maker.py     -> make ALL the audio (voiceover + ambience + music), ElevenLabs
+    7. scene_clips.py     -> render one silent SCENE clip per beat (Seedance) + lay the voiceover
+    8. assemble.py        -> join the scenes into the final video
 The result is output/final_video.mp4.
 
 Before it starts, manager.py checks whether you've already run this SAME link. If so it
@@ -115,8 +116,11 @@ if __name__ == "__main__":
         run_start = time.time()
         print("\nRemoving the chosen files so they get rebuilt ...")
         manager.apply_redo(targets)
-        step("REDO 1/2", "Re-render the picked scene clip(s)", ["scene_clips.py"])
-        step("REDO 2/2", "Re-join everything into the final video", ["assemble.py"])
+        # audio_maker reuses the voiceovers already on disk (a redo doesn't change the words),
+        # and only regenerates one if it's missing — so the re-rendered clip has its voice.
+        step("REDO 1/3", "Make sure the audio exists (voiceover + ambience + music)", ["audio_maker.py"])
+        step("REDO 2/3", "Re-render the picked scene clip(s)", ["scene_clips.py"])
+        step("REDO 3/3", "Re-join everything into the final video", ["assemble.py"])
         manager.save_state(url, "redo", manager.health_check(manager.load_json(manager.ANALYSIS)))
         print("\n" + "=" * 55, flush=True)
         print("  REDO DONE", flush=True)
@@ -145,22 +149,24 @@ if __name__ == "__main__":
         report = manager.health_check(manager.load_json(manager.ANALYSIS))
         manager.print_health(report)
         manager.delete_broken(report)
-        step("REPAIR 1/3", "Re-make any missing character portraits", ["gen_characters.py"])
-        step("REPAIR 2/3", "Re-render any missing/broken scene clips", ["scene_clips.py"])
-        step("REPAIR 3/3", "Re-join everything into the final video", ["assemble.py"])
+        step("REPAIR 1/4", "Re-make any missing character portraits", ["gen_characters.py"])
+        step("REPAIR 2/4", "Re-make any missing audio (voiceover + ambience + music)", ["audio_maker.py"])
+        step("REPAIR 3/4", "Re-render any missing/broken scene clips", ["scene_clips.py"])
+        step("REPAIR 4/4", "Re-join everything into the final video", ["assemble.py"])
     else:
         # FRESH: start from zero. Empty the folder first so nothing from an old run leaks in,
-        # then run all 7 steps. scrape needs the link; the others read files.
+        # then run all 8 steps. scrape needs the link; the others read files.
         manager.wipe_output()
-        step("STEP 1/7", "Scrape the story", ["scrape.py", url])
-        step("STEP 2/7", "Analyze story + invent characters", ["analyze.py"])
+        step("STEP 1/8", "Scrape the story", ["scrape.py", url])
+        step("STEP 2/8", "Analyze story + invent characters", ["analyze.py"])
         # Write the script BEFORE drawing faces, so we only pay to draw the characters
         # the script actually uses (analyze often invents extras the story never needs).
-        step("STEP 3/7", "Write the scene script", ["scene_writer.py"])
-        step("STEP 4/7", "Make a locked portrait for each USED character", ["gen_characters.py"])
-        step("STEP 5/7", "Clone character voices + narrator voiceover", ["voice_maker.py"])
-        step("STEP 6/7", "Render one cinematic scene clip per beat", ["scene_clips.py"])
-        step("STEP 7/7", "Join the scenes into the final video", ["assemble.py"])
+        step("STEP 3/8", "Write the scene script", ["scene_writer.py"])
+        step("STEP 4/8", "Make a locked portrait for each USED character", ["gen_characters.py"])
+        step("STEP 5/8", "Assign each character a voice (+ random narrator)", ["voice_maker.py"])
+        step("STEP 6/8", "Make all the audio (voiceover + ambience + music)", ["audio_maker.py"])
+        step("STEP 7/8", "Render one silent scene clip per beat + lay the voiceover", ["scene_clips.py"])
+        step("STEP 8/8", "Join the scenes into the final video", ["assemble.py"])
 
     # Remember what this run did, so the NEXT run can detect it and offer repair.
     manager.save_state(url, mode, manager.health_check(manager.load_json(manager.ANALYSIS)))
