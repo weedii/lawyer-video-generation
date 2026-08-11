@@ -17,6 +17,12 @@ composing reverse angles). Every scene, dialogue or narration, is built the same
      (audio_maker) and is recorded on the scene as sc["vo_file"]/["vo_seconds"]; here we
      just read it, size the video to it, and mux it over the silent clip (no sync).
 
+The scene IMAGES are composed one at a time (step 1 stays serial so each room's anchor is
+ready before the next scene reuses it), but the Seedance CLIPS (step 2) all render in
+PARALLEL — up to MAX_PARALLEL_RENDERS at once — instead of one after another, so a 9-scene
+video's render step takes about as long as the slowest single clip rather than the sum of
+them all. Same cost, far less waiting.
+
 So this step only pays for the VIDEO: Seedance (the silent clips) and Nano Banana 2 (the
 composed scene images). The voiceover, ambience beds and music are all made and paid for
 in audio_maker (step 6); the editor (assemble.py) later joins the beats with those beds,
@@ -45,6 +51,8 @@ import time
 import math
 import shutil
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 import fal_client
 from PIL import Image
@@ -105,6 +113,14 @@ LATENTSYNC_MODEL = "fal-ai/latentsync"            # legacy: single-face sync
 # (verified: without it a vertical start image still came out landscape).
 VIDEO_RES = "720p"
 VIDEO_ASPECT = "9:16"
+
+# How many Seedance clips to render AT THE SAME TIME. Each clip is an independent fal job
+# (submit, then poll), so they can all run in parallel instead of one after another — the old
+# serial loop is why a 9-scene video's render step took ~23 minutes; in parallel it takes about
+# as long as the single slowest clip (~2-3 min). We cap the number in flight so we don't hammer
+# fal's queue; raise it for a bigger fleet or lower it to 1 (fully serial) if fal rate-limits.
+# Override with the MAX_PARALLEL_RENDERS env var without touching the code.
+MAX_PARALLEL_RENDERS = int(os.getenv("MAX_PARALLEL_RENDERS", "6"))
 
 # ONE shared visual look, dropped into EVERY prompt — the character sheet, the composed
 # scene image, and every Seedance clip. Reusing the exact same palette/grain/lens wording is
@@ -469,34 +485,43 @@ def _short_err(e) -> str:
 VIDEO_MAX_WAIT = 600      # give one clip this long to finish before we stop waiting
 VIDEO_POLL_EVERY = 5      # ask the queue for its status this often
 VIDEO_JOBS = os.path.join(OUT_DIR, "_video_jobs.json")   # out_file -> fal request_id
+# The job store is one JSON file that every render reads-modifies-writes. With clips now
+# rendering in parallel (MAX_PARALLEL_RENDERS), several threads touch this file at once, so we
+# guard it with a lock — otherwise two threads' writes race and one job id is lost (and a job we
+# paid for becomes uncollectable). RLock (reentrant) so a locked helper can call another locked
+# helper on the same thread without deadlocking.
+_JOBS_LOCK = threading.RLock()
 
 
 def _video_jobs() -> dict:
     """The saved out_file -> fal request_id map of clips we have paid to start, so a run
     killed mid-wait can collect the finished video next time instead of paying twice."""
-    try:
-        with open(VIDEO_JOBS) as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    with _JOBS_LOCK:
+        try:
+            with open(VIDEO_JOBS) as f:
+                return json.load(f)
+        except Exception:
+            return {}
 
 
 def _remember_video_job(out_path: str, job_id: str, model: str):
     """Record a submitted job (id + which model made it) so a later run can collect it for
     free. The model is stored too because the collect call must rebuild the handle against
     the SAME endpoint — Seedance, Sync 2.0 and LatentSync all use this one store."""
-    jobs = _video_jobs()
-    jobs[os.path.basename(out_path)] = {"id": job_id, "model": model}
-    with open(VIDEO_JOBS, "w") as f:
-        json.dump(jobs, f, indent=2)
+    with _JOBS_LOCK:                      # hold the lock across the read AND the write
+        jobs = _video_jobs()
+        jobs[os.path.basename(out_path)] = {"id": job_id, "model": model}
+        with open(VIDEO_JOBS, "w") as f:
+            json.dump(jobs, f, indent=2)
 
 
 def _forget_video_job(out_path: str):
     """Drop a job once its video is safely on disk (or is permanently dead)."""
-    jobs = _video_jobs()
-    if jobs.pop(os.path.basename(out_path), None) is not None:
-        with open(VIDEO_JOBS, "w") as f:
-            json.dump(jobs, f, indent=2)
+    with _JOBS_LOCK:                      # hold the lock across the read AND the write
+        jobs = _video_jobs()
+        if jobs.pop(os.path.basename(out_path), None) is not None:
+            with open(VIDEO_JOBS, "w") as f:
+                json.dump(jobs, f, indent=2)
 
 
 def _save_video(result: dict, out_path: str) -> bool:
@@ -743,6 +768,38 @@ def _mux_audio(video_path: str, audio_path: str, out_path: str) -> bool:
         print(f"    (mux fallback failed: {e}); keeping the raw clip")
         shutil.copyfile(video_path, out_path)
         return os.path.exists(out_path)
+
+
+def _render_task(task: dict) -> dict:
+    """Render ONE queued scene: its silent Seedance clip, then lay the pre-made voiceover over
+    it. This runs in a WORKER THREAD (many at once), so it must touch only this scene's own
+    files — it does: a unique temp `_src_NN.mp4` and this scene's `clip_NN.mp4`. The only shared
+    thing it hits is the fal-job store, which is lock-guarded. It does NOT mutate any counters or
+    the analysis data — it just returns the billed seconds and whether it worked, so the main
+    thread can total the cost and set the scene's beats in order, with no cross-thread races."""
+    i = task["i"]
+    src = os.path.join(OUT_DIR, f"_src_{i:02d}.mp4")
+    # Wrap the whole thing: a worker that raises would otherwise re-raise in the main thread and
+    # crash the entire render pass. Catching it here means one bad clip just skips (ok=False),
+    # exactly like the old serial loop — the other clips are unaffected.
+    try:
+        secs = make_video_clip(task["start_img"], task["prompt"], task["dur"], src,
+                               generate_audio=False)
+        if secs == 0.0 or not os.path.exists(src):
+            return {"task": task, "secs": 0.0, "ok": False}
+        # Lay the voiceover over the silent clip (NO lip-sync). -shortest trims the picture to the
+        # voice, so the finished clip is exactly as long as the narration; no voiceover -> keep
+        # the silent clip as-is. The voiceover file is a kept output; only the temp _src is removed.
+        if task["vo_secs"] > 0:
+            _mux_audio(src, task["vo_path"], task["clip_path"])
+        else:
+            os.replace(src, task["clip_path"])
+        if os.path.exists(src):
+            os.remove(src)
+        return {"task": task, "secs": secs, "ok": True}
+    except Exception as e:
+        print(f"    [{i}] render failed ({_short_err(e)})")
+        return {"task": task, "secs": 0.0, "ok": False}
 
 
 # --- Ambient bed: continuous room tone per location ------------------------
@@ -1151,6 +1208,10 @@ def main():
     reused_video_seconds = 0.0  # Seedance seconds of clips reused from a prior run (paid before)
     reused_images = 0           # composed images reused from a prior run (paid before)
     reused_pro = 0              # of those reused images, how many were Pro-fallback composes
+    # The loop below only COMPOSES each scene image (serial, so the room anchor stays consistent)
+    # and queues a render task per scene that needs a new clip; the queued clips are then rendered
+    # all at once, in parallel, after the loop (see MAX_PARALLEL_RENDERS).
+    render_tasks = []
     location_ref = {}       # setting -> first image made there (keep the room identical)
     compose_cache = {}      # (same people, same place) -> reuse that image (no re-pay)
     coverage_cache = {}     # (same people, same place) -> reuse the angle set (no re-pay)
@@ -1347,43 +1408,61 @@ def main():
         prompt = (build_narration_vo_prompt(sc, lead_c) if is_narr
                   else build_scene_prompt(sc, chars_by_name))
 
-        if DRAFT:                                  # cheap preview: silent clip, no VO
-            if make_video_clip(start_img, prompt, "5s", clip_path, generate_audio=False) > 0:
-                sc["beats"] = insert_beats + [beat]
-                print(f"  [{i}] {sc.get('type','scene').upper()} [{who}] -> {clip_name} (DRAFT)")
-            continue
-
-        # 1) The voiceover for THIS scene was already made by audio_maker (step 6). Read its
-        #    file and length so we can size the video to it and lay it over the silent clip.
-        vo_file = sc.get("vo_file", "")
-        vo_path = os.path.join(OUT_DIR, vo_file) if vo_file else ""
-        vo_secs = sc.get("vo_seconds", 0.0) if vo_path and os.path.exists(vo_path) else 0.0
-
-        # 2) Render the SILENT Seedance clip, sized to cover the voiceover (a touch longer so
-        #    the VO is never clipped). No-audio = half price and nothing to lip-sync.
-        dur = fit_duration(vo_secs) if vo_secs > 0 else scene_duration(sc.get("dialogue", []))
-        src = os.path.join(OUT_DIR, f"_src_{i:02d}.mp4")
-        secs = make_video_clip(start_img, prompt, dur, src, generate_audio=False)
-        if secs == 0.0 or not os.path.exists(src):
-            print(f"  [{i}] {sc.get('type','scene').upper()} skipped: Seedance could not render it.")
-            continue
-        scene_video_seconds += secs
-        sc["clip_seconds"] = secs      # store the billed length so a later reuse prices it exactly
-
-        # 3) Lay the pre-made voiceover over the silent clip (NO lip-sync). -shortest trims the
-        #    picture to the voice, so the finished clip is exactly as long as the narration.
-        #    The voiceover file is kept (it's a step output), only the temp video is removed.
-        if vo_secs > 0:
-            _mux_audio(src, vo_path, clip_path)
+        # The voiceover for THIS scene was already made by audio_maker (step 6); read its file
+        # and length so the video can be sized to it and the voice laid over it. DRAFT mode is a
+        # cheap preview: the shortest clip and no voiceover.
+        if DRAFT:
+            vo_path, vo_secs, dur = "", 0.0, "5s"
         else:
-            os.replace(src, clip_path)             # no voiceover -> keep the silent clip as-is
-        if os.path.exists(src):
-            os.remove(src)
-        sc["beats"] = insert_beats + [beat]
-        vo_note = f" over {vo_secs:.1f}s voiceover" if vo_secs > 0 else " (no voiceover)"
-        print(f"  [{i}] {sc.get('type','scene').upper()} [{who}] -> {clip_name} "
-              f"(silent {dur}{vo_note}){' + detail' if insert_beats else ''}"
-              f"{'  [image: PRO fallback, $0.15]' if used_pro_fallback else ''}")
+            vo_file = sc.get("vo_file", "")
+            vo_path = os.path.join(OUT_DIR, vo_file) if vo_file else ""
+            vo_secs = sc.get("vo_seconds", 0.0) if vo_path and os.path.exists(vo_path) else 0.0
+            # Size the clip to cover the voiceover (a touch longer so the VO is never clipped).
+            dur = fit_duration(vo_secs) if vo_secs > 0 else scene_duration(sc.get("dialogue", []))
+
+        # Don't render inline — QUEUE the render. All queued clips are fired together, in
+        # parallel, after this loop. Everything the render + its result line needs is captured
+        # now, while we have this scene's context.
+        render_tasks.append({
+            "i": i, "sc": sc, "clip_name": clip_name, "clip_path": clip_path,
+            "start_img": start_img, "prompt": prompt, "dur": dur,
+            "vo_path": vo_path, "vo_secs": vo_secs,
+            "beat": beat, "insert_beats": insert_beats, "who": who,
+            "used_pro_fallback": used_pro_fallback,
+            "type_label": sc.get("type", "scene").upper(),
+        })
+
+    # --- Render every queued clip IN PARALLEL ------------------------------------------------
+    # The loop above composed each scene image (serial, so the room anchor stays consistent) and
+    # queued a render task per scene that needs a new clip. Now fire those Seedance jobs together,
+    # up to MAX_PARALLEL_RENDERS at a time, instead of waiting for each to finish before starting
+    # the next — that serial wait is what made the render step take ~23 minutes. The clips finish
+    # in whatever order they're ready; as each lands we total its cost and set the scene's beats
+    # HERE on the main thread, so the workers never touch shared state.
+    if render_tasks:
+        workers = min(MAX_PARALLEL_RENDERS, len(render_tasks))
+        word = "clip" if len(render_tasks) == 1 else "clips"
+        print(f"Rendering {len(render_tasks)} {word} in parallel (up to {workers} at a time; "
+              f"they finish as they're ready) ...")
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_render_task, t) for t in render_tasks]
+            for fut in as_completed(futures):
+                r = fut.result()
+                t, sc, i = r["task"], r["task"]["sc"], r["task"]["i"]
+                if not r["ok"]:
+                    print(f"  [{i}] {t['type_label']} skipped: Seedance could not render it.")
+                    continue
+                scene_video_seconds += r["secs"]
+                sc["clip_seconds"] = r["secs"]     # store billed length so a later reuse prices it exactly
+                sc["beats"] = t["insert_beats"] + [t["beat"]]
+                if DRAFT:
+                    print(f"  [{i}] {t['type_label']} [{t['who']}] -> {t['clip_name']} (DRAFT)")
+                else:
+                    vo_note = (f" over {t['vo_secs']:.1f}s voiceover" if t["vo_secs"] > 0
+                               else " (no voiceover)")
+                    print(f"  [{i}] {t['type_label']} [{t['who']}] -> {t['clip_name']} "
+                          f"(silent {t['dur']}{vo_note}){' + detail' if t['insert_beats'] else ''}"
+                          f"{'  [image: PRO fallback, $0.15]' if t['used_pro_fallback'] else ''}")
 
     # --- Cost: this step pays for TWO things only (the audio was paid in step 6):
     #   1) fal Seedance      - the silent scene videos ($0.026/s, half price with no audio)

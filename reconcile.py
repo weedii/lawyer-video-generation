@@ -21,8 +21,16 @@ HOW fal billing actually works (verified on the live run + fal's official docs):
     TRUNCATES to the namespace root (…/kling-video/requests/<id>, …/flux/…,
     …/bytedance/…). The full model name only appears on the earlier submit POST.
     So we recover the real model by matching each billed result back to the
-    submit POSTs of the same namespace, in order (FIFO). The pipeline submits
-    sequentially per namespace, so order is exact.
+    submit POSTs of the same namespace, in order (FIFO).
+
+    The Seedance clip renders now fire in PARALLEL (scene_clips.MAX_PARALLEL_RENDERS),
+    so their submit/result log lines can interleave and the FIFO order is no longer the
+    submit order. That is STILL correct for the total, because every Seedance clip in this
+    pipeline is SILENT (same per-unit rate) — so which silent submit pairs with which result
+    doesn't change the priced sum, and the units are summed from the complete log either way.
+    The Nano Banana composes still run serially, so their order stays exact. (If you ever run
+    a MIX of audio and silent Seedance clips in parallel, the audio/silent split per clip could
+    be mis-paired — re-serialise or tag the result with the request id if that ever matters.)
 
 Other services:
   - OpenAI:     real token cost, taken from analysis.json (the scripts compute it

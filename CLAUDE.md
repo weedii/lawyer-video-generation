@@ -289,8 +289,9 @@ run's summary is saved to `output/run_state.json`.
   first-person voiceover, plus per-scene `ambience`, `detail`, `time_jump`. `voice_maker.py`
   gives the narrator a random gender-matched voice. `audio_maker.py` makes ALL the audio
   (voiceover + ambience + music) and prints the ElevenLabs cost on its own. `scene_clips.py`
-  composes each scene image, renders ONE silent Seedance clip, and muxes the pre-made voiceover
-  over it. `assemble.py` joins the clips with the ambience bed, ducked music and location cards.
+  composes each scene image (serially, to keep the room anchor consistent), renders the silent
+  Seedance clips **in parallel** (up to `MAX_PARALLEL_RENDERS`), and muxes the pre-made voiceover
+  over each. `assemble.py` joins the clips with the ambience bed, ducked music and location cards.
 - Cost tiers: Seedance 1.5 pro i2v **$0.026/s** (silent, 720p); ElevenLabs TTS **$0.10/1k
   chars**; ElevenLabs sound-generation **~$0.002/s**; Nano Banana 2 compose/portrait **$0.08/image at 1K**.
 - Each script prints its **cost AND run time**; `run.py` prints the total cost table + total run time.
@@ -298,7 +299,7 @@ run's summary is saved to `output/run_state.json`.
 ## Next steps (in order)
 1. Judge quality on a few videos; improve weak spots (narration tone, voice fit, image quality).
 2. Editing variety: reaction beats, zoom-ins, better music, maybe optional detail inserts back on.
-3. Cheaper/faster: fewer Nano images (cap cast / reuse composites), parallelize the clip renders (they run one at a time now).
+3. Cheaper/faster: fewer Nano images (cap cast / reuse composites). **Parallel clip renders — DONE:** `scene_clips.py` now composes the scene images serially (so the room anchor stays consistent) but fires all the Seedance clips at once, up to `MAX_PARALLEL_RENDERS` (default 6, override via the env var) — a 9-scene render dropped from ~23 min to about the length of the slowest single clip. Same cost, just concurrent. The `_video_jobs.json` crash-recovery store is lock-guarded so the parallel renders can't race on it.
 4. Once quality is reliably good → full automation (see below).
 
 ---

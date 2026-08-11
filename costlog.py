@@ -28,9 +28,16 @@ import os
 import sys
 import json
 import time
+import threading
 
 LOG_PATH = os.path.join("output", "api_calls.jsonl")
 _PAID_HOSTS = ("fal.run", "fal.ai", "openai.com", "elevenlabs.io")
+
+# The scene clips now render in PARALLEL, so several threads call _log at the same time. Guard
+# the append so two threads can't interleave a half-written line into api_calls.jsonl (which
+# would make reconcile.py choke on a corrupt record). The per-model billed-unit TOTALS reconcile
+# computes are order-independent, so the only thing we must protect is the write itself.
+_LOG_LOCK = threading.Lock()
 
 # Header names (lowercased) that carry a billing signal on any service.
 _COST_HINTS = ("billable", "cost", "credit", "character", "charge", "x-fal-billable-units")
@@ -92,11 +99,13 @@ def _log(service: str, model: str, method: str, url: str, status,
         except Exception:
             pass
 
-    # Full detail -> file (everything to the paid hosts).
+    # Full detail -> file (everything to the paid hosts). Locked so parallel clip renders can't
+    # interleave two half-lines into the same record.
     try:
         os.makedirs("output", exist_ok=True)
-        with open(LOG_PATH, "a") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        with _LOG_LOCK:
+            with open(LOG_PATH, "a") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
         pass
 
