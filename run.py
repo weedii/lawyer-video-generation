@@ -116,6 +116,10 @@ if __name__ == "__main__":
         run_start = time.time()
         print("\nRemoving the chosen files so they get rebuilt ...")
         manager.apply_redo(targets)
+        # Zero the "paid this run" tally: the steps below re-record spend only for the pieces
+        # they actually remake, so the final table separates this redo's cost from the whole
+        # video's price (which still counts every reused piece).
+        manager.zero_spent()
         # audio_maker reuses the voiceovers already on disk (a redo doesn't change the words),
         # and only regenerates one if it's missing — so the re-rendered clip has its voice.
         step("REDO 1/3", "Make sure the audio exists (voiceover + ambience + music)", ["audio_maker.py"])
@@ -149,6 +153,9 @@ if __name__ == "__main__":
         report = manager.health_check(manager.load_json(manager.ANALYSIS))
         manager.print_health(report)
         manager.delete_broken(report)
+        # Zero the "paid this run" tally so the final table separates this repair's cost from the
+        # whole video's price; each step below re-records spend only for what it actually remakes.
+        manager.zero_spent()
         step("REPAIR 1/4", "Re-make any missing character portraits", ["gen_characters.py"])
         step("REPAIR 2/4", "Re-make any missing audio (voiceover + ambience + music)", ["audio_maker.py"])
         step("REPAIR 3/4", "Re-render any missing/broken scene clips", ["scene_clips.py"])

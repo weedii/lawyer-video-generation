@@ -229,10 +229,31 @@ _SUMMARY_ORDER = ["analyze", "script", "images", "voices",
                   "clips"]   # "clips" = legacy combined key from old runs (still printed if present)
 
 
-def record(data: dict, key: str, label: str, amount: float):
-    """Save one step's real cost into the analysis data, so the whole-video
-    total can be printed when the pipeline finishes."""
-    data.setdefault("costs", {})[key] = {"label": label, "amount": round(amount, 4)}
+def record(data: dict, key: str, label: str, amount: float, spent: float = None):
+    """Save one step's cost into the analysis data, so the whole-video total can be printed
+    when the pipeline finishes.
+
+    Two numbers are stored per step:
+      - amount = the TRUE price of this step's pieces in the finished video, whether they were
+        made this run or REUSED from a previous run. This is what the video really cost to
+        build, so the total always reads the same no matter how many runs it took.
+      - spent  = what THIS run actually paid — i.e. only the pieces regenerated now. On a
+        full fresh run spent == amount; on a repair/redo that reuses most pieces, spent is
+        just the few that were remade. Defaults to amount when a step doesn't reuse anything."""
+    if spent is None:
+        spent = amount
+    data.setdefault("costs", {})[key] = {"label": label,
+                                         "amount": round(amount, 4),
+                                         "spent": round(spent, 4)}
+
+
+def reset_spent(data: dict):
+    """Zero the 'spent this run' figure on every recorded cost. Called at the start of a
+    REDO/REPAIR run so the 'paid this run' line counts only the pieces this run regenerates:
+    the reused pieces (and the steps that don't run at all) contribute $0 to what was spent,
+    while their real price still stands in the video total."""
+    for entry in data.get("costs", {}).values():
+        entry["spent"] = 0.0
 
 
 def print_summary(data: dict):
@@ -240,7 +261,8 @@ def print_summary(data: dict):
     costs_map = data.get("costs", {})
     footer = "(scraping + final assembly are free; ElevenLabs & OpenAI are estimates)"
 
-    # Collect the rows in pipeline order (known steps first, then any extras).
+    # Collect the rows in pipeline order (known steps first, then any extras). Each row
+    # carries the TRUE price (amount) and what THIS run paid for it (spent).
     rows = []
     seen = set()
     for key in _SUMMARY_ORDER + [k for k in costs_map if k not in _SUMMARY_ORDER]:
@@ -248,7 +270,7 @@ def print_summary(data: dict):
         if not entry or key in seen:
             continue
         seen.add(key)
-        rows.append((entry["label"], entry["amount"]))
+        rows.append((entry["label"], entry["amount"], entry.get("spent", entry["amount"])))
 
     if not rows:
         print("\n" + "=" * 72)
@@ -258,18 +280,25 @@ def print_summary(data: dict):
         print("=" * 72)
         return
 
-    total = sum(a for _, a in rows)
+    total = sum(a for _, a, _ in rows)          # the finished video's real price
+    spent = sum(s for _, _, s in rows)          # what THIS run actually paid
     # Pad every label to the longest one so ALL prices start in the same column.
-    label_w = max([len(l) for l, _ in rows] + [len("TOTAL")])
+    label_w = max([len(l) for l, _, _ in rows] + [len("TOTAL"), len("YOU PAID THIS RUN")])
     box = max(label_w + 14, len(footer) + 2)   # box wide enough for labels + footer
 
     print("\n" + "=" * box)
     print("  COST OF THIS VIDEO")
     print("=" * box)
-    for label, amount in rows:
+    for label, amount, _ in rows:
         print(f"  {label:<{label_w}}   ${amount:>8.4f}")
     print("  " + "-" * (box - 2))
     print(f"  {'TOTAL':<{label_w}}   ${total:>8.4f}")
+    # On a repair/redo most pieces are reused (spent $0) but still counted in the total above,
+    # so the total is the whole video's price. Add a line showing what this run actually cost,
+    # but only when it differs — on a full fresh run everything was paid, so spent == total.
+    if total - spent > 0.0001:
+        print(f"  {'YOU PAID THIS RUN':<{label_w}}   ${spent:>8.4f}")
+        print(f"  (the rest was reused from the last run at no cost)")
     print(f"  {footer}")
     print("=" * box)
 

@@ -717,6 +717,19 @@ def fit_duration(audio_secs: float) -> str:
     return f"{max(5, min(10, n))}s"
 
 
+def billed_seconds(sc: dict) -> float:
+    """The Seedance seconds a scene's clip was billed. Prefer the exact value we stored when
+    we rendered it (sc["clip_seconds"]); if it's missing (an older run, or a clip made before
+    we stored it), re-derive the request length the clip was sized to — the voiceover length
+    via fit_duration, exactly how make it below — so a reused clip still contributes its real
+    price to the video total."""
+    if sc.get("clip_seconds"):
+        return float(sc["clip_seconds"])
+    vo = sc.get("vo_seconds", 0.0) or 0.0
+    dur = fit_duration(vo) if vo > 0 else scene_duration(sc.get("dialogue", []))
+    return float(int(dur[:-1]))
+
+
 def _mux_audio(video_path: str, audio_path: str, out_path: str) -> bool:
     """Fallback only: if a lip-sync re-dub fails, at least put our CORRECT-WORDS audio on the
     Seedance video (trimmed to the voice length) so the scene keeps the right words — the
@@ -1128,20 +1141,70 @@ def main():
     # is recorded on each scene: sc["vo_file"]/["vo_seconds"] for the voiceover, sc["ambient"]
     # for the room bed. This step only renders the SILENT videos and lays that voiceover over
     # them, so the only paid work here is Seedance (video) + Nano Banana 2 (scene images).
-    scene_video_seconds = 0.0   # Seedance SILENT scene clips ($0.026/s — every clip is silent now)
-    detail_video_seconds = 0.0  # Seedance seconds for silent detail inserts ($0.026/s, no audio)
-    scene_images = 0        # composed images we paid for (scene composites + details)
+    # Two tallies per paid thing so the final table can separate the video's TRUE price from
+    # what THIS run paid: the "spent" ones count only pieces we generate now; the "reused" ones
+    # count pieces collected from a previous run's disk (they cost $0 now but their real price
+    # still belongs in the video total, so a repair/redo total matches a fresh build).
+    scene_video_seconds = 0.0   # Seedance SILENT scene clips rendered THIS run ($0.026/s)
+    detail_video_seconds = 0.0  # Seedance seconds for silent detail inserts made THIS run
+    scene_images = 0            # composed images we PAID for this run (scene composites + details)
+    reused_video_seconds = 0.0  # Seedance seconds of clips reused from a prior run (paid before)
+    reused_images = 0           # composed images reused from a prior run (paid before)
+    reused_pro = 0              # of those reused images, how many were Pro-fallback composes
     location_ref = {}       # setting -> first image made there (keep the room identical)
     compose_cache = {}      # (same people, same place) -> reuse that image (no re-pay)
     coverage_cache = {}     # (same people, same place) -> reuse the angle set (no re-pay)
     detail_by_loc = {}      # setting -> detail insert beat made there (reuse, no re-pay)
 
-    print(f"Rendering {len(scenes)} scenes ...")
+    # Header that tells the truth about this run: how many scene clips actually need rendering
+    # (their clip file is missing) vs how many are already on disk and will just be reused. On a
+    # redo/repair only the deleted clips are missing, so this says "rendering 1, reusing 8"
+    # instead of a misleading "Rendering 9 scenes".
+    to_render = [i for i, _ in enumerate(scenes, 1)
+                 if not os.path.exists(os.path.join(OUT_DIR, f"clip_{i:02d}.mp4"))]
+    n_render, n_reuse = len(to_render), len(scenes) - len(to_render)
+    if n_render == 0:
+        print(f"All {len(scenes)} scene clips are already on disk — reusing them, nothing to render.")
+    elif n_reuse == 0:
+        print(f"Rendering {len(scenes)} scenes ...")
+    else:
+        nums = ", ".join(str(i) for i in to_render)
+        print(f"{len(scenes)} scenes: rendering {n_render} "
+              f"(scene{'s' if n_render != 1 else ''} {nums}), "
+              f"reusing {n_reuse} already on disk from the last run ...")
 
     for i, sc in enumerate(scenes, 1):
         clip_name = f"clip_{i:02d}.mp4"
         clip_path = os.path.join(OUT_DIR, clip_name)
         sc_setting = sc.get("setting", setting) or setting
+
+        # Resume guard FIRST (normal pipeline, detail inserts off): if this scene's clip is
+        # already on disk we reuse the whole scene untouched — no image compose, no render, ONE
+        # clean line. It costs $0 now, but its clip seconds and its own composed image still
+        # count toward the video's TRUE total below. Doing this BEFORE the compose work is what
+        # removes the old confusing double "reusing scene image" + "reused clip" pair for a scene
+        # we aren't touching. (When detail inserts are on, we fall through to the fuller path so
+        # the scene's insert beat is rebuilt too.)
+        if os.path.exists(clip_path) and not DETAIL_INSERTS:
+            is_narr = sc.get("type") == "narration"
+            who = ((sc.get("characters") or [lead_name or "?"])[0] if is_narr
+                   else " + ".join(sc.get("characters", [])) or "?")
+            sc["beats"] = [{"file": clip_name, "kind": sc.get("type", "dialogue"),
+                            "speaker": lead_name if is_narr else None, "silent": False}]
+            reused_video_seconds += billed_seconds(sc)
+            # Count the scene's OWN composed image only if it has its own file. Scenes that
+            # shared another scene's image (same cast + same place) have no file of their own,
+            # so counting them would double-count one paid image.
+            own_img = os.path.join(OUT_DIR, f"scene_{i:02d}.png")
+            if os.path.exists(own_img):
+                reused_images += 1
+                reused_pro += sc.get("image_pro", 0)
+                # Keep the room anchor so a scene RE-rendered this run in the same location still
+                # matches the room of its untouched neighbours (without it the room can drift).
+                location_ref.setdefault(sc_setting.strip().lower(), own_img)
+            print(f"  [{i}] {sc.get('type','scene').upper()} [{who}] -> {clip_name} "
+                  f"(reused from last run, $0)")
+            continue
 
         # Who is IN this shot.
         if sc.get("type") == "narration":
@@ -1211,10 +1274,13 @@ def main():
             else:
                 start_img = os.path.join(OUT_DIR, f"scene_{i:02d}.png")
                 if os.path.exists(start_img):
-                    # Resume guard: this scene image was composed in a previous run —
-                    # reuse it, don't re-pay Nano Banana.
+                    # Resume guard: this scene image was composed in a previous run — reuse it,
+                    # don't re-pay Nano Banana. It cost $0 now, but it's still one image the
+                    # video is built from, so it counts toward the TRUE total (not toward spent).
                     print(f"    (reusing scene image {os.path.basename(start_img)} "
                           "— already on disk, $0)")
+                    reused_images += 1
+                    reused_pro += sc.get("image_pro", 0)
                     location_ref.setdefault(loc_key, start_img)
                     compose_cache[cache_key] = start_img
                 else:
@@ -1232,6 +1298,9 @@ def main():
                                            room_ref=room_ref, people=locks):
                         used_pro_fallback = _pro_fallbacks > pf_before
                         scene_images += 1
+                        # Remember on the scene whether it fell back to Pro, so if a later run
+                        # reuses this image it still prices it as Pro (not the cheaper NB2 rate).
+                        sc["image_pro"] = 1 if used_pro_fallback else 0
                         location_ref.setdefault(loc_key, start_img)
                         compose_cache[cache_key] = start_img
         if not (start_img and os.path.exists(start_img)):
@@ -1263,9 +1332,13 @@ def main():
         beat = {"file": clip_name, "kind": sc.get("type", "dialogue"),
                 "speaker": lead_name if is_narr else None, "silent": False}
 
-        # Resume guard: a finished clip on disk is reused for free.
+        # Resume guard for the DETAIL-INSERTS-ON path only (the normal detail-off run already
+        # reused this clip at the top of the loop). A finished clip on disk is reused for free,
+        # but its billed seconds still belong in the video's TRUE total; the reused image was
+        # already counted in the compose section above, so we only add the clip here.
         if os.path.exists(clip_path):
             sc["beats"] = insert_beats + [beat]
+            reused_video_seconds += billed_seconds(sc)
             print(f"  [{i}] {sc.get('type','scene').upper()} [{who}] -> {clip_name} (reused, $0)")
             continue
 
@@ -1295,6 +1368,7 @@ def main():
             print(f"  [{i}] {sc.get('type','scene').upper()} skipped: Seedance could not render it.")
             continue
         scene_video_seconds += secs
+        sc["clip_seconds"] = secs      # store the billed length so a later reuse prices it exactly
 
         # 3) Lay the pre-made voiceover over the silent clip (NO lip-sync). -shortest trims the
         #    picture to the voice, so the finished clip is exactly as long as the narration.
@@ -1314,22 +1388,39 @@ def main():
     # --- Cost: this step pays for TWO things only (the audio was paid in step 6):
     #   1) fal Seedance      - the silent scene videos ($0.026/s, half price with no audio)
     #   2) fal Nano Banana 2 - the composed scene images ($0.08 each; Pro fallback tops up)
+    # Each is priced twice: the TRUE total (this run's pieces + the ones reused from a prior
+    # run) for the video's real price, and SPENT (this run's pieces only) for what we paid now.
     _, silent_rate = costs.seedance_rates()
-    scene_cost = scene_video_seconds * silent_rate
+
+    def _image_price(n_images: int, n_pro: int) -> float:
+        # Every composed image costs the NB2 rate; each one that fell back to Pro (NB2 returned
+        # nothing, so NB2 billed $0) is topped up by the gap so its true cost is Pro's.
+        return (n_images * costs.NANO_BANANA_2_EDIT_PER_IMAGE
+                + n_pro * (costs.NANO_BANANA_PRO_EDIT_PER_IMAGE
+                           - costs.NANO_BANANA_2_EDIT_PER_IMAGE))
+
+    # TRUE total = this run's pieces + everything reused from disk (paid on an earlier run).
+    total_video_seconds = scene_video_seconds + reused_video_seconds
+    total_images = scene_images + reused_images
+    total_pro = _pro_fallbacks + reused_pro
+    scene_cost = total_video_seconds * silent_rate
     detail_cost = detail_video_seconds * silent_rate
-    # Images: every composed image is counted at the NB2 rate; each one that fell back to Pro
-    # (NB2 returned nothing, so NB2 billed $0) is topped up by the gap so its true cost is Pro's.
-    image_cost = (scene_images * costs.NANO_BANANA_2_EDIT_PER_IMAGE
-                  + _pro_fallbacks * (costs.NANO_BANANA_PRO_EDIT_PER_IMAGE
-                                      - costs.NANO_BANANA_2_EDIT_PER_IMAGE))
+    image_cost = _image_price(total_images, total_pro)
     video_cost = scene_cost + detail_cost + image_cost
 
-    # Record each piece under its OWN key so the final table lists them one by one.
-    fb_note = f" (incl. {_pro_fallbacks} Pro fallback)" if _pro_fallbacks else ""
+    # SPENT this run = only the pieces we regenerated now (reused ones cost $0 today).
+    scene_spent = scene_video_seconds * silent_rate
+    image_spent = _image_price(scene_images, _pro_fallbacks)
+
+    # Record each piece under its OWN key so the final table lists them one by one; the label
+    # shows the video's real numbers (total), and spent drives the "you paid this run" line.
+    fb_note = f" (incl. {total_pro} Pro fallback)" if total_pro else ""
     costs.record(data, "scene_video",
-                 f"Scene videos - fal Seedance silent ({scene_video_seconds:.0f} seconds)", scene_cost)
+                 f"Scene videos - fal Seedance silent ({total_video_seconds:.0f} seconds)",
+                 scene_cost, spent=scene_spent)
     costs.record(data, "scene_images",
-                 f"Scene images - fal Nano Banana 2 ({scene_images} images){fb_note}", image_cost)
+                 f"Scene images - fal Nano Banana 2 ({total_images} images){fb_note}",
+                 image_cost, spent=image_spent)
     if detail_cost:
         costs.record(data, "detail_video",
                      f"Detail inserts - fal Seedance silent ({detail_video_seconds:.0f} seconds)", detail_cost)
@@ -1337,20 +1428,29 @@ def main():
     with open(analysis_path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
+    video_spent = scene_spent + image_spent + detail_cost   # what fal charged us THIS run
     n_inserts = sum(1 for v in detail_by_loc.values() if v)
-    fb = f", {_pro_fallbacks} Pro fallback" + ("s" if _pro_fallbacks != 1 else "") if _pro_fallbacks else ""
+    fb = f", {total_pro} Pro fallback" + ("s" if total_pro != 1 else "") if total_pro else ""
     print(f"\nUpdated output/analysis.json with the scene beats. "
-          f"({scene_images} images{fb}, {n_inserts} detail inserts)")
-    # Print each paid piece for this step, so nothing is hidden inside one number.
-    print("\n  Video cost — each paid piece:")
-    print(f"    Scene videos    (fal Seedance, silent): {scene_video_seconds:.0f} seconds "
+          f"({total_images} images{fb}, {n_inserts} detail inserts)")
+    # Print each piece for this step, so nothing is hidden inside one number. The numbers are
+    # the WHOLE video's (this run's pieces + any reused from a prior run), matching the final
+    # cost table; then, if a repair/redo reused some, show what this run actually paid.
+    print("\n  Video cost — each piece (whole video):")
+    print(f"    Scene videos    (fal Seedance, silent): {total_video_seconds:.0f} seconds "
           f"x ${silent_rate}/second = ${scene_cost:.4f}")
-    print(f"    Scene images    (fal Nano Banana 2):    {scene_images} images "
+    print(f"    Scene images    (fal Nano Banana 2):    {total_images} images "
           f"x ${costs.NANO_BANANA_2_EDIT_PER_IMAGE}/image = ${image_cost:.4f}{fb_note}")
     if detail_cost:
         print(f"    Detail inserts  (fal Seedance, silent): {detail_video_seconds:.0f} seconds "
               f"x ${silent_rate}/second = ${detail_cost:.4f}")
-    costs.show(f"Video total ({len(scenes)} scenes: Seedance video + Nano Banana images)", video_cost)
+    if video_cost - video_spent > 0.0001:
+        print(f"    -> whole video: ${video_cost:.4f}; paid THIS run: ${video_spent:.4f} "
+              f"(the rest was reused at $0)")
+    # The per-step COST line reports what fal charged THIS run (reused pieces cost $0 now),
+    # so it matches your actual spend; the final table still carries the whole-video price.
+    costs.show(f"Video made this run ({len(scenes)} scenes: Seedance video + Nano Banana images)",
+               video_spent)
 
 
 if __name__ == "__main__":

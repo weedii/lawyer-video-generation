@@ -273,6 +273,19 @@ def apply_redo(targets: list) -> int:
     return n
 
 
+def zero_spent():
+    """Reset the 'paid this run' tally on analysis.json before a REDO/REPAIR, so the final cost
+    table can show what THIS run actually cost separately from the video's full price. Every
+    reused piece keeps its real price in the total but counts $0 as spent now; the steps that
+    run this time write their own spent back over the zero."""
+    data = load_json(ANALYSIS)
+    if not data:
+        return
+    costs.reset_spent(data)
+    with open(ANALYSIS, "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
 def redo_targets_from_flag(scene_str: str, with_image: bool, data: dict) -> list:
     """Build redo targets from a --redo/--redo-image flag value like '3,6' (no questions)."""
     valid = {i for i, *_ in scene_list(data)}

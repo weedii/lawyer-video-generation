@@ -106,9 +106,13 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
   repair vs. scan, health-checks every artifact, and wipes/keeps the folder accordingly
 - `scrape.py`, `analyze.py`, `gen_characters.py` — story → characters + portraits
 - `scene_writer.py`, `voice_maker.py`, `audio_maker.py`, `scene_clips.py`, `assemble.py` — script → assign voices → make all audio → scene clips → video
-- `costs.py` — price list + per-step cost/time printer (step 6 prints each paid piece —
-  fal Seedance video, fal Nano Banana 2 images, ElevenLabs voice, ElevenLabs sound —
-  separately, and the final cost table lists them one by one)
+- `costs.py` — price list + per-step cost/time printer (each paid piece — fal Seedance video,
+  fal Nano Banana 2 images, ElevenLabs voice, ElevenLabs sound — is recorded and printed
+  separately, and the final cost table lists them one by one). It tracks two numbers per piece:
+  the **whole-video price** (counting pieces reused from a previous run) and what **this run
+  actually paid**. So the "COST OF THIS VIDEO" total always shows the full ~$4 the video is
+  worth, and after a **repair or redo** an extra "YOU PAID THIS RUN" line shows just the few
+  pieces that were remade (e.g. one redone scene ≈ $0.31) — the reused rest is $0.
 - `costlog.py`, `reconcile.py`, `sitecustomize.py` — cost spy: with `COSTLOG=1` set, log every API call and compute the REAL cost from actual billed units
 - `requirements.txt` — the Python libraries to install
 - `.env` — API keys (ignored by git)

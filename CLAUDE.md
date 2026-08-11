@@ -155,12 +155,21 @@ run's summary is saved to `output/run_state.json`.
   voiceover + sane length), delete broken files so the steps rebuild them, wipe/keep the
   folder, and save `run_state.json`.
 - `costs.py` — price constants + the per-step cost/time printer; every script prints its cost.
-  Step 6 (`scene_clips.py`) prints EACH paid piece on its own line — fal Seedance (video),
-  fal Nano Banana 2 (scene images), ElevenLabs TTS (voiceover), ElevenLabs sound (ambience +
-  music) — and records each under its own key, so the final "COST OF THIS VIDEO" table lists
-  them separately instead of lumping them into one "clips" number. All prices web-verified
-  (OpenAI $2/$8 per 1M; NB2 $0.08/1K; Seedance silent $0.026/s; ElevenLabs TTS $0.10/1k,
-  sound $0.002/s).
+  Each paid piece is recorded under its OWN key — fal Seedance (video, step 7), fal Nano
+  Banana 2 (scene images, step 7), ElevenLabs TTS (voiceover, step 6), ElevenLabs sound
+  (ambience + music, step 6) — so the final "COST OF THIS VIDEO" table lists them separately
+  instead of lumping them into one "clips" number. All prices web-verified (OpenAI $2/$8 per
+  1M; NB2 $0.08/1K; Seedance silent $0.026/s; ElevenLabs TTS $0.10/1k, sound $0.002/s).
+- **Whole-video price vs "you paid this run" (repair/redo).** `costs.record` stores TWO numbers
+  per step: `amount` = the piece's real price in the finished video whether it was made this
+  run or REUSED from a prior run, and `spent` = what THIS run actually paid (reused pieces = $0
+  now). So the "COST OF THIS VIDEO" TOTAL always reads the same (~$4/video) no matter how many
+  repairs/redos it took, and on a repair/redo an extra "YOU PAID THIS RUN" line shows just the
+  few pieces regenerated (e.g. one redone scene = ~$0.31). `manager.zero_spent()` resets the
+  per-run tally at the start of a repair/redo (`costs.reset_spent`), so steps that don't run
+  count $0 spent while their price still stands in the total. Without this the table used to
+  collapse after a redo — reused pieces recorded $0 and the printed TOTAL wrongly dropped to a
+  fraction of the real cost.
 - `reconcile.py` — REAL cost from the billed-units spy log (`COSTLOG=1`).
 - `README.md` — the same steps in plain English.
 

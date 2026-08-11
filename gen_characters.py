@@ -192,10 +192,14 @@ def main():
         # lives in one place (analysis.json). Next steps read it from here.
         c["file"] = file_name
 
-    # Record this step's real cost for the end-of-pipeline summary.
+    # Record for the end-of-pipeline summary. The TRUE total is every USED character's portrait
+    # (each $0.08) whether it was made now or reused from a prior run, so the video's price reads
+    # the same on a repair as on a fresh build; spent is only the portraits we actually paid for
+    # this run (total_cost), which drives the "you paid this run" line.
+    portraits_total = len(to_make) * costs.NANO_BANANA_2_PER_IMAGE
     costs.record(data, "images",
                  f"Character portraits - Nano Banana 2 (1K) x{len(to_make)}",
-                 total_cost)
+                 portraits_total, spent=total_cost)
 
     # Save the whole analysis file back, now with the image files included.
     with open(analysis_path, "w") as f:
