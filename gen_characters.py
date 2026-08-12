@@ -2,7 +2,8 @@
 
 It reads the analysis file (from analyze.py + scene_writer.py), and for every character
 who appears in a scene (speaking or silent on screen), plus the protagonist who narrates,
-generates one vertical portrait with fal.ai. Characters analyze invented but the script
+generates one vertical portrait with fal.ai. The portraits are independent of one another, so
+they're all generated IN PARALLEL (see MAX_PARALLEL). Characters analyze invented but the script
 never uses are skipped, so we don't pay for faces that never appear. It also saves the
 image file name back into analysis.json so the next steps know which picture is whose.
 
@@ -20,6 +21,7 @@ import sys
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 import fal_client
 from dotenv import load_dotenv
@@ -29,6 +31,13 @@ load_dotenv()
 
 if not os.getenv("FAL_KEY"):
     sys.exit("ERROR: FAL_KEY is empty. Open .env and paste your fal.ai key.")
+
+# The portraits are INDEPENDENT of one another (no shared room or anchor, each writes its own
+# file), so we generate them ALL AT ONCE instead of one-at-a-time — a 7-portrait run drops from
+# ~1.5 min to about the length of a single image. Cap how many run together (a video has ~5-9
+# characters, so 9 lets them all go in one wave); override with MAX_PARALLEL_PORTRAITS, or set it
+# to 1 to go back to fully serial if fal ever rate-limits.
+MAX_PARALLEL = int(os.getenv("MAX_PARALLEL_PORTRAITS", "9"))
 
 # Nano Banana 2 (fal) = Google Gemini 3.1 Flash Image. These portraits are the locked
 # identity reference reused everywhere downstream, so body errors here poison every scene
@@ -122,6 +131,18 @@ def _download(url: str, out_path: str, tries: int = 4):
     raise RuntimeError(f"could not download image after {tries} tries: {last}")
 
 
+def _make_portrait(item: dict) -> dict:
+    """Generate ONE character's portrait. Runs in a WORKER THREAD (many at once): it only writes
+    this character's own file and touches no shared state, so all portraits render in parallel.
+    Wrapped so one failed portrait just skips instead of crashing the whole batch."""
+    try:
+        make_image(item["prompt"], item["out_path"])
+        return {"item": item, "ok": True}
+    except Exception as e:
+        print(f"    portrait for {item['name']} failed ({type(e).__name__}: {e})")
+        return {"item": item, "ok": False}
+
+
 def main():
     analysis_path = os.path.join(OUT_DIR, "analysis.json")
     if not os.path.exists(analysis_path):
@@ -155,7 +176,10 @@ def main():
           f"script. Making a portrait for each used one ...\n")
 
     total_cost = 0.0
+    todo = []   # portraits that actually need generating this run (queued, then run in parallel)
 
+    # PASS 1 (serial, no API): decide each character's fate and print it in order — skip the ones
+    # the script never uses, reuse any portrait already on disk, and QUEUE the rest for generation.
     for c in characters:
         name = c["fictional_name"]
         if name not in used:
@@ -165,6 +189,8 @@ def main():
             continue
         file_name = f"char_{slug(name)}.png"
         out_path = os.path.join(OUT_DIR, file_name)
+        # Record the file this character WILL have now; a failed generation removes it below.
+        c["file"] = file_name
 
         # Resume guard: a portrait already on disk (e.g. from a run that crashed partway,
         # like a dropped download) is reused for free — record its file and move on, so a
@@ -173,7 +199,6 @@ def main():
         # not mistaken for a finished portrait.
         if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
             print(f"- {name} ({c['role']}) — reused, already on disk ($0)")
-            c["file"] = file_name
             continue
 
         # EVERY used character gets a real, photorealistic locked reference sheet
@@ -183,14 +208,27 @@ def main():
         # CHAR_SHEET forces the neutral, multi-angle sheet layout on top of it.
         who = f"{name} ({c['role']}{', by role' if c.get('anonymous') else ''})"
         prompt = f"{c['image_prompt']} {CHAR_SHEET}"
-        print(f"- {who} ...")
-        make_image(prompt, out_path)
-        total_cost += costs.NANO_BANANA_2_PER_IMAGE
+        todo.append({"c": c, "name": name, "who": who, "out_path": out_path, "prompt": prompt})
 
-        print(f"  saved {out_path}")
-        # Write the image file name back into this character, so everything
-        # lives in one place (analysis.json). Next steps read it from here.
-        c["file"] = file_name
+    # PASS 2 (parallel): generate every queued portrait at once, up to MAX_PARALLEL. Each is
+    # independent, so we tally the cost and confirm each file on the MAIN thread as it finishes —
+    # the workers never touch shared state, so there are no races.
+    if todo:
+        workers = min(MAX_PARALLEL, len(todo))
+        print(f"\nGenerating {len(todo)} portrait{'s' if len(todo) != 1 else ''} in parallel "
+              f"(up to {workers} at a time) ...")
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for fut in as_completed([pool.submit(_make_portrait, t) for t in todo]):
+                r = fut.result()
+                t = r["item"]
+                if r["ok"]:
+                    total_cost += costs.NANO_BANANA_2_PER_IMAGE
+                    print(f"- {t['who']} -> saved {t['out_path']}")
+                else:
+                    # Generation failed -> this character has no picture; drop its file so the
+                    # downstream steps don't try to compose a missing image.
+                    t["c"].pop("file", None)
+                    print(f"- {t['who']} — FAILED, no portrait made")
 
     # Record for the end-of-pipeline summary. The TRUE total is every USED character's portrait
     # (each $0.08) whether it was made now or reused from a prior run, so the video's price reads

@@ -56,7 +56,7 @@ and time, plus a total at the end):
 | 1 | `scrape.py <url>` | Download story + comments | — | free |
 | 2 | `analyze.py` | Organize + invent fictional characters | OpenAI GPT-4.1 | ~$0.03 |
 | 3 | `scene_writer.py` | Write the scene script (7–9 scenes covering how the events happened; a first-person voiceover over each) | OpenAI GPT-4.1 | ~$0.03–0.12* |
-| 4 | `gen_characters.py` | One locked vertical portrait per USED character (scene reference) | fal.ai Nano Banana 2 (1K) | $0.08 each |
+| 4 | `gen_characters.py` | One locked vertical portrait per USED character (scene reference), all rendered **in parallel** | fal.ai Nano Banana 2 (1K) | $0.08 each |
 | 5 | `voice_maker.py` | Assign each character a voice (and pick the random narrator voice) — no audio made yet | ElevenLabs voice IDs | free |
 | 6 | `audio_maker.py` | Make **all** the audio: the narrator voiceover per scene + one ambience bed per location + one music bed | ElevenLabs speech + sound | ~$0.10/1k chars + ~$0.002/sec |
 | 7 | `scene_clips.py` (+ `scene_image.py`, `scene_video.py`) | Compose each scene image (`scene_image.py`), render one **silent** Seedance clip (`scene_video.py`), lay the voiceover (made in step 6) over it (no lip-sync) | Nano Banana 2 (1K) + Seedance 1.5 pro (silent) | ~$0.026/sec Seedance + $0.08/image |
