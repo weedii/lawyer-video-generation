@@ -30,7 +30,7 @@ OUR_IMAGE_MEGAPIXELS = 1
 
 # --- Image models (fal) ---------------------------------------------------
 # Nano Banana 2 (Google Gemini 3.1 Flash Image) — OUR CURRENT image model. Portraits
-# (gen_characters.py) and scene composites (scene_clips.py) both use it.
+# (gen_characters.py) and scene composites (scene_image.py) both use it.
 #     fal.ai/models/fal-ai/nano-banana-2 (+ /edit)
 #
 # RESOLUTION TIERS (fal charges a multiplier on the 1K base price):
@@ -44,10 +44,11 @@ OUR_IMAGE_MEGAPIXELS = 1
 NANO_BANANA_2_PER_IMAGE = 0.08        # portraits (text-to-image), 1K
 NANO_BANANA_2_EDIT_PER_IMAGE = 0.08   # scene composites (compose the cast into one shot), 1K
 
-# Nano Banana PRO — the AUTOMATIC compose fallback (scene_clips.py). NB2 is tried first;
+# Nano Banana PRO — the AUTOMATIC compose fallback (scene_image.py). NB2 is tried first;
 # when it returns no image on a hard multi-person shot, that ONE image is retried on Pro.
 # The per-video cost adds this price only for the composes that actually fell back
-# (scene_clips counts them), so the printed cost is honest whether 0 or 3 scenes needed Pro.
+# (scene_image flags each fallback, scene_clips sums them), so the printed cost is honest
+# whether 0 or 3 scenes needed Pro.
 # NOTE: Pro is the fallback, NOT an upgrade — on a 9-scene bake-off Pro DUPLICATED a
 # character in a 2-person shot while NB2 rendered the cast correctly. It is here because a
 # second opinion from a different model beats returning no image at all.

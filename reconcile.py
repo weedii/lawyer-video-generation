@@ -23,14 +23,15 @@ HOW fal billing actually works (verified on the live run + fal's official docs):
     So we recover the real model by matching each billed result back to the
     submit POSTs of the same namespace, in order (FIFO).
 
-    The Seedance clip renders now fire in PARALLEL (scene_clips.MAX_PARALLEL_RENDERS),
-    so their submit/result log lines can interleave and the FIFO order is no longer the
-    submit order. That is STILL correct for the total, because every Seedance clip in this
-    pipeline is SILENT (same per-unit rate) — so which silent submit pairs with which result
-    doesn't change the priced sum, and the units are summed from the complete log either way.
-    The Nano Banana composes still run serially, so their order stays exact. (If you ever run
-    a MIX of audio and silent Seedance clips in parallel, the audio/silent split per clip could
-    be mis-paired — re-serialise or tag the result with the request id if that ever matters.)
+    Both the Nano Banana composes AND the Seedance clip renders now fire in PARALLEL
+    (scene_clips.MAX_PARALLEL_RENDERS), so their submit/result log lines interleave and the FIFO
+    order is no longer the submit order. That is STILL correct for the total, because within one
+    namespace every call is billed at the SAME per-unit rate — every Seedance clip is SILENT, and
+    every scene composite is nano-banana-2 at $0.08 (a Pro fallback lands in a DIFFERENT namespace,
+    nano-banana-pro, priced on its own). So which submit pairs with which result never changes the
+    priced sum, and the units are summed from the complete log either way. (If you ever run a MIX
+    of audio and silent Seedance clips in parallel, the audio/silent split per clip could be
+    mis-paired — re-serialise or tag the result with the request id if that ever matters.)
 
 Other services:
   - OpenAI:     real token cost, taken from analysis.json (the scripts compute it
@@ -70,7 +71,7 @@ PRICES = {
     # "nano-banana-pro", and full_model() takes the FIRST matching prefix — so the longer,
     # more specific keys must all come BEFORE the bare "nano-banana" ones at the bottom.
     #
-    # Pro is the AUTOMATIC compose fallback: scene_clips tries Nano Banana 2 first and
+    # Pro is the AUTOMATIC compose fallback: scene_image tries Nano Banana 2 first and
     # retries a hard image on Pro when NB2 returns nothing, so a normal run can legitimately
     # bill a few nano-banana-pro/edit images. Each tier prices correctly here because they
     # are separate namespaces (a failed NB2 attempt bills $0 and never reaches results).

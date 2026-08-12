@@ -59,7 +59,7 @@ and time, plus a total at the end):
 | 4 | `gen_characters.py` | One locked vertical portrait per USED character (scene reference) | fal.ai Nano Banana 2 (1K) | $0.08 each |
 | 5 | `voice_maker.py` | Assign each character a voice (and pick the random narrator voice) — no audio made yet | ElevenLabs voice IDs | free |
 | 6 | `audio_maker.py` | Make **all** the audio: the narrator voiceover per scene + one ambience bed per location + one music bed | ElevenLabs speech + sound | ~$0.10/1k chars + ~$0.002/sec |
-| 7 | `scene_clips.py` | Compose each scene image, render one **silent** Seedance clip, lay the voiceover (made in step 6) over it (no lip-sync) | Nano Banana 2 (1K) + Seedance 1.5 pro (silent) | ~$0.026/sec Seedance + $0.08/image |
+| 7 | `scene_clips.py` (+ `scene_image.py`, `scene_video.py`) | Compose each scene image (`scene_image.py`), render one **silent** Seedance clip (`scene_video.py`), lay the voiceover (made in step 6) over it (no lip-sync) | Nano Banana 2 (1K) + Seedance 1.5 pro (silent) | ~$0.026/sec Seedance + $0.08/image |
 | 8 | `assemble.py` | Join the clips + ambience + ducked music + location cards | ffmpeg (local) | free |
 
 \* The scene script is rewritten (another GPT call) if it leaks a real name **or comes back
@@ -105,7 +105,10 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 - `manager.py` — the run brain: detects a previous run of the same link, asks start-over vs.
   repair vs. scan, health-checks every artifact, and wipes/keeps the folder accordingly
 - `scrape.py`, `analyze.py`, `gen_characters.py` — story → characters + portraits
-- `scene_writer.py`, `voice_maker.py`, `audio_maker.py`, `scene_clips.py`, `assemble.py` — script → assign voices → make all audio → scene clips → video
+- `scene_writer.py`, `voice_maker.py`, `audio_maker.py`, `assemble.py` — script → assign voices → make all audio → final video
+- `scene_clips.py` — step-7 orchestrator: plans each scene, then runs the image compose and clip render in parallel (also holds the ElevenLabs audio helpers `audio_maker.py` imports)
+  - `scene_image.py` — composes each scene's picture (Nano Banana 2) + the shared helpers
+  - `scene_video.py` — animates each picture into a silent clip (Seedance) + the crash-safe render queue
 - `costs.py` — price list + per-step cost/time printer (each paid piece — fal Seedance video,
   fal Nano Banana 2 images, ElevenLabs voice, ElevenLabs sound — is recorded and printed
   separately, and the final cost table lists them one by one). It tracks two numbers per piece:
@@ -159,7 +162,7 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 ## Next improvements
 - Editing variety: reaction beats, zoom-ins, better music, optional detail inserts back on.
 - Cheaper: fewer Nano images (cap cast, reuse composites). Images are now the biggest single line, so reuse pays more than it used to.
-- Faster: **done** — the Seedance clips now render in parallel (up to `MAX_PARALLEL_RENDERS`, default 9 so a whole 7–9 scene video renders in one wave), so a full render takes about as long as the slowest single clip instead of the sum of all of them.
+- Faster: **done** — both the scene images and the Seedance clips are now made in parallel (up to `MAX_PARALLEL_RENDERS`, default 9 so a whole 7–9 scene video goes in one wave). Images compose in two waves so a repeated room copies the first image made there; then all clips render at once. The step now takes about as long as the slowest single item instead of the sum of all of them.
 
 ## Final vision (later)
 Fully automated pipeline: scrape sources → score stories (good vs. bad) →

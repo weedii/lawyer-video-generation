@@ -124,7 +124,7 @@ run's summary is saved to `output/run_state.json`.
 | 4. Character portraits | `gen_characters.py` | Nano Banana 2 (1K) | `char_*.png` (locked refs) — only for characters the script USES | $0.08 each |
 | 5. Voices | `voice_maker.py` | assigns each character a voice_id; **narrator = a RANDOM voice per video** (no audio made) | voice_id on every speaker + the narrating lead | free |
 | 6. Audio | `audio_maker.py` | **ElevenLabs** — voiceover per scene (`vo_*.mp3`) + ambience bed per location (`amb_*.mp3`) + music (`music.mp3`) | audio files + `vo_file`/`vo_seconds`/`ambient` on each scene | ~$0.10/1k chars speech + ~$0.002/s sound |
-| 7. Scene clips | `scene_clips.py` | Nano Banana 2 compose + **Seedance 1.5 pro SILENT**, then mux the step-6 voiceover over the silent clip | `clip_*.mp4` | ~$0.026/s Seedance + $0.08/image |
+| 7. Scene clips | `scene_clips.py` (drives `scene_image.py` + `scene_video.py`) | Nano Banana 2 compose (`scene_image.py`) + **Seedance 1.5 pro SILENT** (`scene_video.py`), then mux the step-6 voiceover over the silent clip | `clip_*.mp4` | ~$0.026/s Seedance + $0.08/image |
 | 8. Assemble | `assemble.py` | ffmpeg (local) — joins clips, lays ambience + ducked music + location cards | `final_video.mp4` | free |
 
 - **Audio is its OWN step now** (`audio_maker.py`, step 6): all ElevenLabs work — the per-scene
@@ -132,12 +132,15 @@ run's summary is saved to `output/run_state.json`.
   made and PAID here, in one place, so the ElevenLabs cost is printed on its own instead of
   being buried inside the clip step. Each scene gets `vo_file`/`vo_seconds`/`vo_chars` and
   `ambient` written onto it.
-- **Every scene is built the same way** (`scene_clips.py`, step 7): compose ONE image of the
-  on-screen cast (`nano-banana-2/edit`) → render ONE **silent** Seedance clip → mux the
-  voiceover ALREADY MADE in step 6 over the silent clip (no lip-sync; the picture is trimmed to
-  the voice length). So this step pays only for Seedance video + Nano Banana images. Narration
-  scenes are the lone lead, contemplative, mouth closed. Dialogue scenes show the cast acting
-  silently.
+- **Every scene is built the same way** (step 7): compose ONE image of the on-screen cast
+  (`nano-banana-2/edit`) → render ONE **silent** Seedance clip → mux the voiceover ALREADY MADE
+  in step 6 over the silent clip (no lip-sync; the picture is trimmed to the voice length). So
+  this step pays only for Seedance video + Nano Banana images. Narration scenes are the lone
+  lead, contemplative, mouth closed. Dialogue scenes show the cast acting silently.
+  **The step is split across three files:** `scene_image.py` (compose the picture, Nano Banana +
+  the shared helpers), `scene_video.py` (animate it into a clip, Seedance + the crash-safe queue),
+  and `scene_clips.py` (the orchestrator `main()` that plans, then runs the image compose and the
+  clip render in parallel; it also still holds the ElevenLabs audio helpers `audio_maker.py` imports).
 - **Character consistency:** one locked Nano portrait per character, reused as a reference
   into `nano-banana-2/edit` for every scene image. A per-location anchor keeps the room
   identical when the cast changes.
@@ -196,7 +199,7 @@ run's summary is saved to `output/run_state.json`.
 - **Orientation without establishing shots:** the narration MUST name every new place and
   introduce every new person as we arrive (`scene_writer.py` hard rule), backed by location
   cards. This is why detail inserts could be turned off with no confusion.
-- **Detail inserts are DISABLED** (`DETAIL_INSERTS=False` in `scene_clips.py`, kept in code).
+- **Detail inserts are DISABLED** (`DETAIL_INSERTS=False` in `scene_video.py`, kept in code).
   In the VO style they were a redundant 4th orientation cue (narration + cards already do it);
   off saves ~$1.40/video. Flip to `True` to bring back the face-free establishing beat.
 - One **locked image per character**, reused every time = consistency.
@@ -289,9 +292,11 @@ run's summary is saved to `output/run_state.json`.
   first-person voiceover, plus per-scene `ambience`, `detail`, `time_jump`. `voice_maker.py`
   gives the narrator a random gender-matched voice. `audio_maker.py` makes ALL the audio
   (voiceover + ambience + music) and prints the ElevenLabs cost on its own. `scene_clips.py`
-  composes each scene image (serially, to keep the room anchor consistent), renders the silent
-  Seedance clips **in parallel** (up to `MAX_PARALLEL_RENDERS`), and muxes the pre-made voiceover
-  over each. `assemble.py` joins the clips with the ambience bed, ducked music and location cards.
+  (with `scene_image.py` for the pictures and `scene_video.py` for the clips) composes the scene
+  images **in parallel** (two waves so a repeated room copies the first image made there),
+  renders the silent Seedance clips **in parallel** (both up to `MAX_PARALLEL_RENDERS`), and
+  muxes the pre-made voiceover over each. `assemble.py` joins the clips with the ambience bed,
+  ducked music and location cards.
 - Cost tiers: Seedance 1.5 pro i2v **$0.026/s** (silent, 720p); ElevenLabs TTS **$0.10/1k
   chars**; ElevenLabs sound-generation **~$0.002/s**; Nano Banana 2 compose/portrait **$0.08/image at 1K**.
 - Each script prints its **cost AND run time**; `run.py` prints the total cost table + total run time.
@@ -299,7 +304,7 @@ run's summary is saved to `output/run_state.json`.
 ## Next steps (in order)
 1. Judge quality on a few videos; improve weak spots (narration tone, voice fit, image quality).
 2. Editing variety: reaction beats, zoom-ins, better music, maybe optional detail inserts back on.
-3. Cheaper/faster: fewer Nano images (cap cast / reuse composites). **Parallel clip renders — DONE:** `scene_clips.py` now composes the scene images serially (so the room anchor stays consistent) but fires all the Seedance clips at once, up to `MAX_PARALLEL_RENDERS` (default 9 = the max scene count, so all clips render in ONE wave; override via the env var) — a 9-scene render dropped from ~23 min to about the length of the slowest single clip. Same cost, just concurrent. The `_video_jobs.json` crash-recovery store is lock-guarded so the parallel renders can't race on it.
+3. Cheaper/faster: fewer Nano images (cap cast / reuse composites). **Parallel images AND clips — DONE:** `scene_clips.py` runs in three passes (plan → compose → render). The scene IMAGES compose in parallel in TWO waves — wave 1 makes the first image of each location (nothing to copy), wave 2 makes the repeats (each copies its room's wave-1 image so the room stays identical) — then all the Seedance CLIPS render in parallel, both up to `MAX_PARALLEL_RENDERS` (default 9 = the max scene count, so a whole video's images/clips each go in ONE wave; override via the env var). This dropped the step from ~23 min (fully serial) toward the length of the slowest single item. Same cost, just concurrent. Thread-safety: the `_video_jobs.json` crash-recovery store and the `COSTLOG` api-log are lock-guarded, and `compose_scene_image` returns its Pro-fallback flag instead of bumping a shared global.
 4. Once quality is reliably good → full automation (see below).
 
 ---

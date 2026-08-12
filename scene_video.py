@@ -1,0 +1,593 @@
+"""Render each scene's CLIP — the video half of the scene step (memoir pipeline).
+
+This file owns everything that animates a composed scene IMAGE into a silent Seedance clip:
+the crash-safe submit/poll/collect queue machinery, sizing the clip to the voiceover, muxing the
+pre-made voiceover over the silent video, and the Seedance prompt builders. The IMAGE half (making
+the still that each clip starts from) lives in scene_image.py; the step that drives both is
+scene_clips.py. Shared helpers (slug, descriptor, STYLE, OUT_DIR, ...) are imported from scene_image.
+
+Cost: Seedance 1.5 pro SILENT $0.026 / second at 720p. No lip-sync.
+"""
+import os
+import json
+import time
+import math
+import shutil
+import subprocess
+import threading
+import requests
+import fal_client
+from dotenv import load_dotenv
+# Shared building blocks live in scene_image.py (the lower-level half of the scene step).
+from scene_image import (OUT_DIR, STYLE, descriptor, character_gender, identity_lock,
+                         _short_err, compose_detail_image)
+
+load_dotenv()
+# The SCENE video model — our biggest cost. Seedance 1.5 pro (image-to-video) replaced
+# Veo 3.1: Veo's likeness filter refused our AI-invented faces on ~half of clips (a
+# Google policy, not promptable-around), and it cost $0.10-0.15/s. Seedance holds the
+# same two faces, does native lip-sync, is NOT blocked, and is ~$0.052/s — so a whole
+# video comes in under budget. It runs on fal's own queue, so all the crash-safe
+# submit/poll/resume code below is the SAME machinery, just pointed at a new model.
+VIDEO_MODEL = "fal-ai/bytedance/seedance/v1.5/pro/image-to-video"
+# LEGACY (unused): the old on-screen-dialogue path re-dubbed Seedance mouths onto our audio
+# with these lip-sync models. The voiceover style dropped all lip-sync; kept for reference.
+SYNC_MODEL = "fal-ai/sync-lipsync/v2"              # legacy: 2-face active-speaker sync
+LATENTSYNC_MODEL = "fal-ai/latentsync"            # legacy: single-face sync
+# 720p is Seedance's balanced tier and the price we budgeted ($0.052/s with audio); the
+# editor upscales the final cut to 1080x1920. Seedance IGNORES the input image's shape
+# and defaults to 16:9 landscape, so aspect_ratio="9:16" MUST be sent on every call
+# (verified: without it a vertical start image still came out landscape).
+VIDEO_RES = "720p"
+VIDEO_ASPECT = "9:16"
+REACTIONS = False         # insert silent listener reaction cutaways between lines
+REACTION_DUR = "5s"       # Seedance's shortest safe length; the editor caps silent beats short
+# DETAIL INSERT: at each NEW location we open on a short, silent, face-free shot of one
+# object that says where we are (a gavel, a nameplate, a case bundle) — the modern
+# replacement for the establishing wide. It orients the viewer before the scene starts,
+# and because it has no faces nothing can drift. One Nano image ($0.08) + one ~5s silent
+# Seedance clip (~$0.13) per location, cached so we pay once per place. This is real footage,
+# not a frozen still — that is why the old still-zoom establishing beat was removed.
+# DISABLED for now (set back to True to re-enable). In the narration style the VOICEOVER
+# already introduces every new place and person (and the location cards label the place on
+# screen), so the detail inserts became a redundant fourth cue — they mostly added visual
+# variety, not orientation. Turning them off saves ~$0.85 per video (5 Nano images + 5 silent
+# Seedance clips on a typical run) and makes the cut tighter. Kept in the code (make_detail_insert,
+# compose_detail_image, detail_insert_prompt below) so they can be switched on again later.
+DETAIL_INSERTS = False
+DETAIL_DUR = "5s"         # Seedance's shortest safe length; the editor trims it to a ~1.2s glance
+
+
+def make_detail_insert(i: int, detail: str, setting: str, room_ref: str):
+    """Build the establishing detail beat for a new location: compose a face-free object
+    image (Nano) and animate it as a short SILENT Seedance clip. Returns
+    (beat_or_None, images_paid, video_seconds). Resume-guarded on both the image and the
+    clip, so a re-run collects finished work for free. A failure at either step returns
+    no beat — the scene simply opens on its dialogue instead."""
+    if not DETAIL_INSERTS or not detail:
+        return None, 0, 0.0
+    img = os.path.join(OUT_DIR, f"detail_{i:02d}.png")
+    clip = f"insert_{i:02d}.mp4"
+    clip_path = os.path.join(OUT_DIR, clip)
+    beat = {"file": clip, "kind": "insert", "speaker": None, "silent": True}
+
+    if os.path.exists(clip_path):                      # already rendered on a prior run
+        print(f"    (reusing detail insert {clip} — already on disk, $0)")
+        return beat, 0, 0.0
+
+    images_paid = 0
+    if not os.path.exists(img):
+        if not compose_detail_image(detail, setting, room_ref, img):
+            return None, 0, 0.0
+        images_paid = 1
+    # Silent (generate_audio=False): a detail shot has no voice, and the editor holds
+    # it only ~1.2s, so 4s is plenty and it bills at the cheaper no-audio rate.
+    secs = make_video_clip(img, detail_insert_prompt(detail, setting), DETAIL_DUR,
+                         clip_path, generate_audio=False)
+    if secs == 0.0 or not os.path.exists(clip_path):
+        return None, images_paid, 0.0
+    return beat, images_paid, secs
+
+
+def detail_insert_prompt(detail: str, setting: str) -> str:
+    """Seedance prompt for the silent detail beat: a slow, quiet push-in on the object, no
+    people, tiny real-world motion so it reads as footage rather than a frozen still."""
+    obj = (detail or "the object").strip().rstrip(".")
+    place = (setting or "the room").strip().rstrip(".")
+    return (f"A slow, quiet cinematic push-in on {obj} in {place}. NObody in frame — no "
+            f"person, no hands, no face — only the object. Tiny ambient motion (a slight "
+            f"drift of light, dust, or the object settling), the scene already in gentle "
+            f"movement from the first frame. {STYLE}. No text.")
+
+
+# --- Seedance clip + re-voice ---------------------------------------------------
+
+def clip_duration(text: str) -> str:
+    """Pick a clip length for one spoken line. Seedance accepts 5-10s, so we use 5/6/8
+    (5s is the shortest safe value — a shorter request can be rejected)."""
+    n = len((text or "").split())
+    secs = n / 2.5 + 1.5           # ~2.5 words/sec + a little air
+    return "5s" if secs <= 5 else "6s" if secs <= 6 else "8s"
+
+
+def _line_windows(lines: list):
+    """Give each dialogue line its own time slice (~2.5 words/sec, min 1.8s so even a
+    short line has room to land) plus the running total, clamped to Seedance's 8s ceiling.
+    These slices become an explicit timeline in the prompt. Without a per-speaker time
+    budget Seedance tries to voice both lines at once, rushes the hand-off, and fills the
+    seam with a garbled beat where one person's voice comes out of the other's mouth.
+    A timeline hands each speaker a clear window instead."""
+    wins, t = [], 0.0
+    for d in lines:
+        w = len((d.get("line") or "").split())
+        dur = max(w / 2.5, 1.8)
+        wins.append([t, t + dur])
+        t += dur
+    # If the lines overrun 8s, squeeze every window proportionally so the last line
+    # still gets a slot instead of being cut off at the ceiling.
+    if t > 8.0:
+        scale = 8.0 / t
+        wins = [[s * scale, e * scale] for s, e in wins]
+    return wins, min(t, 8.0)
+
+
+def scene_duration(lines: list) -> str:
+    """Clip length for a whole dialogue scene: match the summed line windows so the
+    clip is only as long as the actual speech. Leaving an empty tail is what lets the
+    model invent extra mumbling to fill it, so we size tight. Clamped to 5/6/8s."""
+    _, total = _line_windows(lines)
+    return "5s" if total <= 5.5 else "6s" if total <= 6.5 else "8s"
+
+
+# A Seedance generation is the one call we CANNOT afford to lose: it is billed the moment
+# fal starts it, and the result only reaches us if we are still listening. fal_client's
+# subscribe() polls the queue in a loop with no overall deadline, so a stalled poll
+# leaves it waiting forever (it hung a real run for 23 minutes on a dead connection).
+# We therefore submit the job ourselves and poll with our own deadline. Crucially we
+# record the request_id on disk BEFORE waiting: a job we already paid for can then be
+# collected on the next run instead of being submitted — and paid for — a second time.
+VIDEO_MAX_WAIT = 600      # give one clip this long to finish before we stop waiting
+VIDEO_POLL_EVERY = 5      # ask the queue for its status this often
+VIDEO_JOBS = os.path.join(OUT_DIR, "_video_jobs.json")   # out_file -> fal request_id
+# The job store is one JSON file that every render reads-modifies-writes. With clips now
+# rendering in parallel (MAX_PARALLEL_RENDERS), several threads touch this file at once, so we
+# guard it with a lock — otherwise two threads' writes race and one job id is lost (and a job we
+# paid for becomes uncollectable). RLock (reentrant) so a locked helper can call another locked
+# helper on the same thread without deadlocking.
+_JOBS_LOCK = threading.RLock()
+
+
+def _video_jobs() -> dict:
+    """The saved out_file -> fal request_id map of clips we have paid to start, so a run
+    killed mid-wait can collect the finished video next time instead of paying twice."""
+    with _JOBS_LOCK:
+        try:
+            with open(VIDEO_JOBS) as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+
+def _remember_video_job(out_path: str, job_id: str, model: str):
+    """Record a submitted job (id + which model made it) so a later run can collect it for
+    free. The model is stored too because the collect call must rebuild the handle against
+    the SAME endpoint — Seedance, Sync 2.0 and LatentSync all use this one store."""
+    with _JOBS_LOCK:                      # hold the lock across the read AND the write
+        jobs = _video_jobs()
+        jobs[os.path.basename(out_path)] = {"id": job_id, "model": model}
+        with open(VIDEO_JOBS, "w") as f:
+            json.dump(jobs, f, indent=2)
+
+
+def _forget_video_job(out_path: str):
+    """Drop a job once its video is safely on disk (or is permanently dead)."""
+    with _JOBS_LOCK:                      # hold the lock across the read AND the write
+        jobs = _video_jobs()
+        if jobs.pop(os.path.basename(out_path), None) is not None:
+            with open(VIDEO_JOBS, "w") as f:
+                json.dump(jobs, f, indent=2)
+
+
+def _save_video(result: dict, out_path: str) -> bool:
+    """Download the finished video out of a fal result payload. Seedance returns
+    {"video": {"url": ...}}; we also accept a {"videos": [...]} list defensively."""
+    video = result.get("video")
+    if not video and result.get("videos"):
+        video = result["videos"][0]
+    url = video.get("url") if isinstance(video, dict) else video
+    if not url:
+        return False
+    with open(out_path, "wb") as f:
+        f.write(requests.get(url, timeout=180).content)
+    return os.path.exists(out_path)
+
+
+def _await_video(handle, out_path: str) -> bool:
+    """Wait for one submitted job, polling with OUR deadline so a stalled queue poll can
+    never hang the run. A failed poll is ignored and retried — the job keeps running on
+    fal's side regardless of whether we are listening. Returns True if the video landed
+    on disk."""
+    deadline = time.time() + VIDEO_MAX_WAIT
+    while time.time() < deadline:
+        try:
+            if isinstance(handle.status(), fal_client.Completed):
+                return _save_video(handle.get(), out_path)
+        except Exception:
+            pass          # transient poll failure — the job is unaffected, just retry
+        time.sleep(VIDEO_POLL_EVERY)
+    return False
+
+
+def _mute_clip(path: str) -> bool:
+    """Replace a clip's audio track with silence, in place. Used for SILENT beats (the
+    face-free detail inserts): we render them with generate_audio=False, but we still give
+    them a silent stereo track so every beat has a matching audio stream for the editor's
+    concat (a clip with NO audio stream at all breaks the concat). It also strips any stray
+    ambience the model might bake in, so a detail insert is guaranteed truly silent."""
+    tmp = path + ".mute.mp4"
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", path,
+                        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+                        "-c:v", "copy", "-c:a", "aac", "-map", "0:v:0", "-map", "1:a:0",
+                        "-shortest", tmp], check=True, capture_output=True)
+        os.replace(tmp, path)
+        return True
+    except Exception as e:
+        print(f"    (could not mute detail insert: {e})")
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        return False
+
+
+def _submit_and_collect(model: str, arguments: dict, out_path: str, label: str) -> bool:
+    """Run ONE fal video-producing job crash-safely — used for the Seedance render AND for the
+    lip-sync re-dubs, since they are all fal queue jobs billed the moment they start. First it
+    collects anything a previous run already paid for (a job submitted, then the run died
+    waiting, keeps running on fal); otherwise it submits, saves the request_id + model BEFORE
+    waiting (so a kill mid-wait can collect it next time instead of paying twice), and polls
+    with our own deadline. Returns True if a video landed on disk."""
+    prior = _video_jobs().get(os.path.basename(out_path))
+    if prior:
+        pid = prior["id"] if isinstance(prior, dict) else prior
+        pmodel = prior.get("model", model) if isinstance(prior, dict) else model
+        try:
+            handle = fal_client.SyncRequestHandle.from_request_id(
+                fal_client.sync_client._client, pmodel, pid)
+            done = isinstance(handle.status(), fal_client.Completed)
+            if (done and _save_video(handle.get(), out_path)) or \
+               (not done and _await_video(handle, out_path)):
+                _forget_video_job(out_path)
+                print(f"    (collected a {label} a previous run already paid for, $0)")
+                return True
+        except Exception as e:
+            print(f"    could not collect the earlier {label} job ({_short_err(e)}); re-submitting")
+
+    for attempt in range(1, 4):
+        try:
+            handle = fal_client.submit(model, arguments=arguments)
+            # Save the id BEFORE waiting: from here on the job is billable, so it must be
+            # recoverable even if this process is killed mid-wait.
+            _remember_video_job(out_path, handle.request_id, model)
+            print(f"    {label} rendering (job {handle.request_id[:8]}, "
+                  f"up to {VIDEO_MAX_WAIT // 60} min) ...")
+            if _await_video(handle, out_path):
+                _forget_video_job(out_path)
+                return True
+            print(f"    {label} attempt {attempt} timed out after {VIDEO_MAX_WAIT // 60} min; "
+                  "job saved, re-run to collect it without paying again")
+            return False
+        except Exception as e:
+            msg = _short_err(e)
+            print(f"    {label} attempt {attempt} failed: {msg}")
+            if "content filter" in msg:          # same wording will fail again — give up
+                return False
+            time.sleep(5)
+    return False
+
+
+def make_video_clip(image_path: str, prompt: str, duration: str, out_path: str,
+                    generate_audio: bool = True) -> float:
+    """Render one Seedance 1.5 pro clip from the start image. The voiceover pipeline always
+    calls this with generate_audio=False (SILENT — half price, and we never hear the
+    characters); the clip then gets a silent stereo track and the narrator's voiceover is
+    laid over it later. (generate_audio=True is legacy, for the old lip-sync path.) Returns
+    the billed seconds, or 0.0 (no file) on failure so one bad beat never crashes the run."""
+    secs = float(int(duration[:-1]))
+    # Seedance takes the duration as a bare number ("5", not "5s") and IGNORES the image
+    # aspect unless aspect_ratio is sent. Ordering is deliberate: the cost logger truncates
+    # the request body, so the SHORT params (especially generate_audio, which sets the billed
+    # rate) go BEFORE the long prompt — otherwise reconcile.py can't tell if audio was on.
+    args = {"generate_audio": generate_audio, "duration": duration[:-1],
+            "resolution": VIDEO_RES, "aspect_ratio": VIDEO_ASPECT,
+            "image_url": fal_client.upload_file(image_path), "prompt": prompt}
+    if _submit_and_collect(VIDEO_MODEL, args, out_path, f"seedance {duration}"):
+        if not generate_audio:
+            _mute_clip(out_path)
+        return secs
+    return 0.0
+
+
+def lipsync(video_path: str, audio_path: str, out_path: str, two_faces: bool) -> bool:
+    """Re-dub a talking clip's MOUTHS onto our correct-voice audio, keeping the same faces.
+    DIALOGUE (two_faces=True) uses Sync 2.0, whose active-speaker detection maps each voice to
+    the right of two faces; NARRATION (one face) uses the cheaper LatentSync. cut_off keeps
+    the video only as long as the voice (we always render the clip a bit LONGER than the
+    audio, so no word is ever cut). Returns True on success; on failure the caller keeps the
+    original clip so a scene is never lost."""
+    model = SYNC_MODEL if two_faces else LATENTSYNC_MODEL
+    args = {"video_url": fal_client.upload_file(video_path),
+            "audio_url": fal_client.upload_file(audio_path)}
+    if model == SYNC_MODEL:
+        args.update({"model": "lipsync-2", "sync_mode": "cut_off"})
+    return _submit_and_collect(model, args, out_path, "sync-2 dub" if two_faces else "latentsync dub")
+
+
+def fit_duration(audio_secs: float) -> str:
+    """Seedance clip length that COMFORTABLY covers the voice track (so the re-dub never cuts
+    a word). Seedance allows 5-10s; we take the audio length + a little air, rounded up and
+    clamped."""
+    n = int(math.ceil(audio_secs + 0.8))
+    return f"{max(5, min(10, n))}s"
+
+
+def billed_seconds(sc: dict) -> float:
+    """The Seedance seconds a scene's clip was billed. Prefer the exact value we stored when
+    we rendered it (sc["clip_seconds"]); if it's missing (an older run, or a clip made before
+    we stored it), re-derive the request length the clip was sized to — the voiceover length
+    via fit_duration, exactly how make it below — so a reused clip still contributes its real
+    price to the video total."""
+    if sc.get("clip_seconds"):
+        return float(sc["clip_seconds"])
+    vo = sc.get("vo_seconds", 0.0) or 0.0
+    dur = fit_duration(vo) if vo > 0 else scene_duration(sc.get("dialogue", []))
+    return float(int(dur[:-1]))
+
+
+def _mux_audio(video_path: str, audio_path: str, out_path: str) -> bool:
+    """Fallback only: if a lip-sync re-dub fails, at least put our CORRECT-WORDS audio on the
+    Seedance video (trimmed to the voice length) so the scene keeps the right words — the
+    mouths just won't match. Better than losing the scene."""
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", video_path, "-i", audio_path,
+                        "-c:v", "copy", "-c:a", "aac", "-map", "0:v:0", "-map", "1:a:0",
+                        "-shortest", out_path], check=True, capture_output=True)
+        return os.path.exists(out_path)
+    except Exception as e:
+        print(f"    (mux fallback failed: {e}); keeping the raw clip")
+        shutil.copyfile(video_path, out_path)
+        return os.path.exists(out_path)
+
+
+def _render_task(task: dict) -> dict:
+    """Render ONE queued scene: its silent Seedance clip, then lay the pre-made voiceover over
+    it. This runs in a WORKER THREAD (many at once), so it must touch only this scene's own
+    files — it does: a unique temp `_src_NN.mp4` and this scene's `clip_NN.mp4`. The only shared
+    thing it hits is the fal-job store, which is lock-guarded. It does NOT mutate any counters or
+    the analysis data — it just returns the billed seconds and whether it worked, so the main
+    thread can total the cost and set the scene's beats in order, with no cross-thread races."""
+    i = task["i"]
+    src = os.path.join(OUT_DIR, f"_src_{i:02d}.mp4")
+    # Wrap the whole thing: a worker that raises would otherwise re-raise in the main thread and
+    # crash the entire render pass. Catching it here means one bad clip just skips (ok=False),
+    # exactly like the old serial loop — the other clips are unaffected.
+    try:
+        secs = make_video_clip(task["start_img"], task["prompt"], task["dur"], src,
+                               generate_audio=False)
+        if secs == 0.0 or not os.path.exists(src):
+            return {"task": task, "secs": 0.0, "ok": False}
+        # Lay the voiceover over the silent clip (NO lip-sync). -shortest trims the picture to the
+        # voice, so the finished clip is exactly as long as the narration; no voiceover -> keep
+        # the silent clip as-is. The voiceover file is a kept output; only the temp _src is removed.
+        if task["vo_secs"] > 0:
+            _mux_audio(src, task["vo_path"], task["clip_path"])
+        else:
+            os.replace(src, task["clip_path"])
+        if os.path.exists(src):
+            os.remove(src)
+        return {"task": task, "secs": secs, "ok": True}
+    except Exception as e:
+        print(f"    [{i}] render failed ({_short_err(e)})")
+        return {"task": task, "secs": 0.0, "ok": False}
+
+
+def extract_last_frame(clip_path: str, out_path: str) -> bool:
+    """Save a still of a clip's ENDING (~0.2s before the end so it's clean), used
+    to start the next line's clip so the action carries forward."""
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-sseof", "-0.2", "-i", clip_path,
+            "-update", "1", "-frames:v", "1", "-q:v", "2", out_path,
+        ], check=True, capture_output=True)
+        return os.path.exists(out_path)
+    except Exception as e:
+        print(f"    (could not grab last frame for continuity: {e})")
+        return False
+
+
+def add_silent_audio(video_path: str, out_path: str) -> bool:
+    """Give a video-only clip (a Seedance reaction rendered with audio OFF) a silent
+    stereo track, so every beat carries audio for the editor."""
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", video_path,
+                        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+                        "-c:v", "copy", "-c:a", "aac", "-map", "0:v:0", "-map", "1:a:0",
+                        "-shortest", out_path], check=True, capture_output=True)
+        return os.path.exists(out_path)
+    except Exception as e:
+        print(f"    (could not add silent track to reaction: {e})")
+        return False
+
+
+def reaction_prompt(sc: dict, listener_c: dict, cue: str = "") -> str:
+    """Seedance prompt for a SILENT reaction beat: the listener reacts with their face
+    only — no speaking, mouth closed — looking toward the other person off-camera."""
+    who = descriptor(listener_c).capitalize()
+    react = f" {cue.strip()}." if cue else ""
+    return ("The scene is already in motion from the very first frame. ONE person "
+            f"listens in silence and reacts only with their face.{react} {who} does "
+            "NOT speak — mouth closed — a small natural reaction (a glance, a "
+            "tightening jaw, a slow breath). They look toward the other person, off "
+            f"to the side, never at the camera. {sc.get('shot', 'tight close-up')}. "
+            "Moody cinematic prestige legal drama, photorealistic.")
+
+
+# --- Prompts ---------------------------------------------------------------
+
+def single_line_prompt(sc: dict, speaker_c: dict, line: str, emotion: str) -> str:
+    """Seedance prompt for a line rendered from a CROPPED SINGLE (only the speaker is in
+    frame). They talk to the other person just OFF-camera to the side — not to the
+    lens — so we get one correct mouth moving and no wrong-person lip-sync."""
+    who = descriptor(speaker_c).capitalize()
+    tone = f", {emotion.strip()}," if emotion else ""
+    return ("The scene is already in motion from the very first frame. ONE person is "
+            f"in frame. {who}{tone} looks toward the other person just off-camera to "
+            f"the side — NOT at the camera — and says these exact words: \"{line}\". "
+            "Only this person's mouth moves to these words, with natural expression and "
+            f"small head movement. {sc.get('shot', 'tight medium shot')}. Moody "
+            "cinematic prestige legal drama, photorealistic.")
+
+
+def line_prompt(sc: dict, speaker_c: dict, listener_descs: list,
+                line: str, emotion: str) -> str:
+    """Seedance prompt for ONE dialogue line: the speaker acts + says it; the others
+    stay in frame reacting silently; nobody faces the camera."""
+    who = descriptor(speaker_c).capitalize()
+    tone = f", {emotion.strip()}," if emotion else ""
+    # CRITICAL: exactly ONE voice in the clip. If the other person also talks,
+    # the whole-clip voice-swap turns their line into the speaker's voice (a man
+    # ends up speaking in the woman's voice). So force the listener SILENT.
+    listen = ""
+    if listener_descs:
+        listen = (f" {' and '.join(listener_descs)} listens in silence, mouth "
+                  f"closed, and does not speak — reacting only with their face.")
+    return (
+        "The scene is already in motion from the very first frame. "
+        f"{sc.get('shot', 'medium two-shot, slow push-in')}. "
+        f"Only {who} speaks{tone}: looking at the other person, they say just "
+        f"these words: \"{line}\".{listen} They face one another and never look "
+        "at or speak to the camera. Moody cinematic prestige legal drama, "
+        "photorealistic."
+    )
+
+
+def _reply_cue(c: dict) -> str:
+    """'She replies' / 'He replies'. The word 'replies' signals to Seedance that the next
+    line is a consecutive response, not simultaneous speech — which is what keeps the
+    two speakers from overlapping into one garbled voice."""
+    return "She replies" if character_gender(c) == "female" else "He replies"
+
+
+def build_scene_prompt(sc: dict, chars_by_name: dict) -> str:
+    """Prompt for a WHOLE dialogue scene as ONE continuous Seedance clip. The clip is rendered
+    SILENT and the narrator's voiceover is laid over it — the characters are never heard — so
+    the model's spoken WORDS do not matter at all. What we need is believable acting: the cast
+    naturally mouthing an exchange in the right TURN ORDER (A, then B, ...) so the scene looks
+    alive under the voiceover. The locked camera, identity locks and anti-clone rules that hold
+    the faces are kept."""
+    lines = sc.get("dialogue", [])
+    speakers = sc.get("characters", [])
+    # Everyone in the frame, not just the talkers: the silent people are composed into
+    # the start image, so the prompt must account for them or Seedance drops or redraws them.
+    onscreen = [n for n in (sc.get("onscreen") or speakers)] or speakers
+    who = {n: descriptor(chars_by_name.get(n, {})) for n in onscreen}
+    n_on = len(onscreen)
+    hold_shot = ("a steady over-the-shoulder shot — one person's shoulder held in the "
+                 "foreground, the other facing the camera in sharp focus" if n_on <= 2 else
+                 f"a steady medium wide {n_on}-shot holding everyone in the room")
+    # Turn order as NATURAL directions (no clock times), so the model paces itself and never
+    # freezes to hit a window. The line text rides along only as an emotion/length hint — it
+    # is replaced on the re-dub, so exact wording is irrelevant.
+    turns = []
+    for j, d in enumerate(lines):
+        spk = who.get(d.get("character", ""), "the other person").capitalize()
+        tone = f" ({d['emotion'].strip()})" if d.get("emotion") else ""
+        when = "speaks first" if j == 0 else "then replies"
+        turns.append(f"{spk} {when}{tone}, talking naturally and continuously through their turn")
+    turn_line = ("; ".join(turns) + "." if turns else
+                 "the people talk naturally back and forth.")
+    # CAST block: pin EVERY on-screen person to their locked identity (hair, build,
+    # CLOTHING COLOUR) so a face can't be redrawn or an outfit recoloured mid-shot.
+    cast = " ".join(f"{who.get(n, 'a person').capitalize()} = "
+                    f"{identity_lock(chars_by_name.get(n, {}))}." for n in onscreen)
+    # Name the people who never speak, so Seedance keeps them present and reacting instead
+    # of treating them as scenery to drift or quietly drop out of frame.
+    silent = [who[n] for n in onscreen if n not in speakers]
+    silent_line = ""
+    if silent:
+        verb = "stays" if len(silent) == 1 else "stay"
+        silent_line = (f" {', '.join(silent).capitalize()} {verb} in the room throughout, "
+                       "silent — mouth closed, listening and reacting with the face.")
+    # The scene's blocking, so the shot has a concrete physical action, not just heads.
+    action = (sc.get("action") or "").strip().rstrip(".")
+    action_line = f" {action}." if action else ""
+    if n_on <= 2:
+        staging = ("two people mid-conversation in an over-the-shoulder framing — the person "
+                   "facing the camera looks at the foreground person beside the lens, never "
+                   "straight into the lens")
+    else:
+        staging = (f"{n_on} people in one conversation, turned toward whoever "
+                   "is speaking, never the camera")
+    return (
+        # Lead with motion so Seedance doesn't open on a frozen staring frame.
+        "ONE continuous LOCKED shot, no cuts / intimate cinematic legal drama.\n"
+        f"A continuous cinematic scene, already in motion from the first frame — {staging}. "
+        # ONE fixed camera for the whole clip; the reframe/reverse angle is banned because
+        # building it makes Seedance duplicate a person into the foreground.
+        f"CAMERA: {hold_shot}, held as ONE fixed angle for the entire clip with at most a "
+        f"very slight, slow push-in. The camera does NOT cut, swing, orbit, or change to a "
+        f"different angle. The foreground person keeps their back to the camera throughout; "
+        f"do NOT turn them around, and do NOT add, duplicate or reveal any second copy of "
+        f"anyone. {STYLE}, natural room ambience.\n"
+        f"CAST: {cast}\n"
+        f"CONVERSATION: the people have a natural, flowing back-and-forth. {turn_line} "
+        "Each speaker's mouth moves SMOOTHLY and CONTINUOUSLY through their whole turn — no "
+        "long pause, no freezing, no stopping mid-sentence — then their mouth closes and they "
+        "listen while the other talks. Only ONE person speaks at a time, in the order above."
+        f"{silent_line}{action_line} "
+        # Pin the blocking to what the start frame shows — the model likes to invent big moves
+        # (a seated person "stands" out of a chair that was never rendered).
+        "Everyone keeps the position the opening frame puts them in — whoever is seated stays "
+        "seated, whoever is standing stays standing; nobody stands up, sits down or walks off, "
+        "and no furniture or object appears, vanishes or changes place. Nuanced facial "
+        "micro-expressions, every person's face and clothing colour identical throughout. "
+        # Hold one stable body per person (the model can briefly clone someone mid-clip).
+        "Exactly one of each person on screen at all times — NEVER duplicate, clone, split, "
+        "mirror or ghost a person; keep one stable body for each person the whole time."
+    )
+
+
+def narration_prompt(sc: dict, lead_c: dict) -> str:
+    """Seedance prompt for a memoir narration beat: the lone protagonist performs it
+    straight to camera, first person."""
+    who = descriptor(lead_c).capitalize() if lead_c else "The narrator"
+    # Same identity lock as the dialogue scenes, so the narrator is unmistakably the
+    # same person (same face + clothing colour) whenever he appears between scenes.
+    lock = identity_lock(lead_c) if lead_c else ""
+    lock_line = f" ({lock})" if lock else ""
+    return (
+        "The scene is already in motion from the very first frame. ONE person is "
+        "ALONE in the shot. "
+        f"{sc.get('shot', 'slow push-in on a lone figure')}. {sc.get('action', '')}. "
+        f"{who}{lock_line} looks directly INTO the camera and tells us their own story, "
+        f"first person, like a memoir confession: \"{sc.get('narration', '')}\". Their mouth "
+        f"moves smoothly and CONTINUOUSLY while speaking — no freezing, no stopping "
+        f"mid-sentence. Nobody else is present. {STYLE}."
+    )
+
+
+def build_narration_vo_prompt(sc: dict, lead_c: dict) -> str:
+    """Silent-motion prompt for a NARRATION beat in the voiceover style: the lone
+    protagonist is present in a fitting place and moves naturally, but does NOT speak on
+    camera — mouth closed, lost in thought — because we hear their voiceover instead. No
+    lip movement means nothing to lip-sync and nothing to look wrong under the VO."""
+    who = descriptor(lead_c).capitalize() if lead_c else "The narrator"
+    lock = identity_lock(lead_c) if lead_c else ""
+    lock_line = f" ({lock})" if lock else ""
+    return (
+        "The scene is already in motion from the very first frame. ONE person is ALONE in "
+        f"the shot, nobody else present. {sc.get('shot', 'slow push-in on a lone figure')}. "
+        f"{sc.get('action', '')}. {who}{lock_line} is lost in thought — contemplative, "
+        "MOUTH CLOSED, NOT speaking, NOT talking to the camera. They breathe and move "
+        "naturally and may glance toward the lens, but they say nothing: no lip movement, no "
+        f"speech. {STYLE}."
+    )

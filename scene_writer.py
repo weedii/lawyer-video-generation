@@ -466,7 +466,7 @@ def clean_scenes(script: dict, valid_names: list = None, lead: str = None) -> di
             "detail": (sc.get("detail") or "").strip(),
             "time_jump": bool(sc.get("time_jump", False)),
             # The continuous background sound of this LOCATION (party chatter, train
-            # rumble). Generated once per location in scene_clips and laid UNDER the whole
+            # rumble). Generated once per location in audio_maker and laid UNDER the whole
             # scene by assemble, so the place is heard throughout, not just at the start.
             "ambience": (sc.get("ambience") or "").strip(),
             "shot": sc.get("shot", ""),
