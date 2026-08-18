@@ -164,8 +164,43 @@ python run.py "https://www.rollonfriday.com/news-content/some-story"
 - Cheaper: fewer Nano images (cap cast, reuse composites). Images are now the biggest single line, so reuse pays more than it used to.
 - Faster: **done** — both the scene images and the Seedance clips are now made in parallel (up to `MAX_PARALLEL_RENDERS`, default 9 so a whole 7–9 scene video goes in one wave). Images compose in two waves so a repeated room copies the first image made there; then all clips render at once. The step now takes about as long as the slowest single item instead of the sum of all of them.
 
+## Automation Stage 1 — pick the best stories (`discover.py`)
+The first half of the automation is built and runs on its own (no video, no cost beyond a few
+cents of text scoring):
+
+```bash
+python discover.py            # find recent stories, score them, pick the best
+python discover.py --show     # just show the current queue + history (free)
+python discover.py --rescore  # ignore history and re-score everything (testing)
+```
+
+It pulls the recent stories off the RollOnFriday front page, scrapes each one's full text, and
+has GPT-4.1 score it on **drama / juicy / lawyer-specific** (blended into one score in code, so
+it's consistent, not a guess). It keeps the best few (a min/max rule: never fewer than MIN, never
+more than MAX, and never a story below a quality floor), skips anything it already scored before,
+and writes the winners to `queue/story_queue.json` — the list the (not-yet-built) Stage 2 will
+turn into videos. Tune it with env vars: `DISCOVER_CANDIDATES`, `DISCOVER_BAR`, `DISCOVER_FLOOR`,
+`DISCOVER_MIN`, `DISCOVER_MAX`. A 10-story scan costs about **$0.025** and takes ~10 seconds.
+
+## Automation Stage 2 — make the picked stories into videos (`batch_maker.py`)
+Takes the winners from Stage 1 and builds a full video for each, into its own review folder:
+
+```bash
+python batch_maker.py            # make the top few pending videos (asks to confirm first)
+python batch_maker.py --max 1    # just the single best pick this run
+python batch_maker.py --dry-run  # show what it would make + the estimate, spend nothing
+python batch_maker.py --yes      # don't ask, just build (automation)
+```
+
+It reads `queue/story_queue.json`, takes the top few still pending (up to `BATCH_MAX`, default 3,
+highest score first), shows a rough cost estimate and asks you to confirm, then builds each one by
+running the normal pipeline (`run.py "<url>" --fresh`). Each finished video is copied into its own
+`videos/<date>-<slug>/` folder so they never overwrite each other, and its queue entry is marked
+`made`. If one fails it's skipped and left in the queue to retry. At the end it prints the REAL
+total, summed from each video's recorded costs. Making stops at the review folder — **no posting.**
+
 ## Final vision (later)
-Fully automated pipeline: scrape sources → score stories (good vs. bad) →
-storyboard + drama arc → generate full video with consistent characters →
+Fully automated pipeline: scrape sources → **score stories (done, `discover.py`)** →
+storyboard + drama arc → **generate full videos (done, `batch_maker.py`)** →
 publish to TikTok accounts → sell ads to legal tech companies.
-**Quality first, automation second.**
+**Quality first, automation second.** (TikTok auto-posting is deliberately not being built yet.)

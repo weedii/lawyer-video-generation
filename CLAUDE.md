@@ -320,3 +320,53 @@ Once manual results are consistently good, turn the whole thing into one dynamic
 6. **Monetize**: use the audience to sell ads to legal tech companies.
 
 > We only build this AFTER the manual results are good enough. Quality first, automation second.
+> **TikTok auto-posting (step 5) is deliberately NOT being built for now** (user's call).
+
+### Automation — Stage 1 is BUILT (`discover.py`): find + score the best stories
+The front half of the vision (steps 1-2) exists as `discover.py`, kept SEPARATE from the
+per-video pipeline so it can be judged on its own before Stage 2 (batch-making videos) is wired in.
+
+- **Find:** pulls the recent story links off the RollOnFriday front page (`LISTING_URLS`;
+  `/latest-news` then the homepage — both return ~21 links; `/news` + `/news-content` are 404s).
+- **Skip:** any link already scored on a past run is remembered in `queue/history.json` and
+  skipped, so each run only spends on genuinely NEW stories (re-run = $0).
+- **Read + Score:** scrapes each new story's FULL text (reusing `scrape.py`) and has GPT-4.1
+  rate it on three 0-10 axes — **drama / juicy / lawyer-specific**. The overall score is a
+  fixed weighted blend computed IN CODE (drama .40, juicy .35, lawyer .25), so identical
+  sub-scores always give an identical overall — deterministic, not a vibe. Non-stories (holiday
+  notices, pay-table roundups, surveys) are forced to 0. A page under `MIN_BODY_CHARS` is
+  scored 0 without a GPT call, so we don't pay to judge junk.
+- **Pick — MIN/MAX hybrid:** keep every story at/above the BAR, capped at MAX; if fewer than
+  MIN clear the bar, top up with the next-best that still clear the FLOOR — and NEVER below the
+  floor, so a weak week is reported honestly instead of padded with bad stories.
+- **Save:** picks are appended (de-duped) to `queue/story_queue.json` with `status: "pending"`
+  — the list Stage 2 will make. `queue/` lives OUTSIDE `output/` on purpose (output/ is wiped
+  per video; discovery memory must survive across videos).
+- **Knobs (env vars, no code edit):** `DISCOVER_CANDIDATES` (10), `DISCOVER_BAR` (7),
+  `DISCOVER_FLOOR` (5), `DISCOVER_MIN` (2), `DISCOVER_MAX` (5), `DISCOVER_WORKERS` (6).
+- **Cost:** one GPT-4.1 call per new story (~$0.0025 each; a 10-story scan was ~$0.025, ~10s).
+  Prints the exact cost like every other script. Makes NO images and NO video.
+- **Usage:** `python discover.py` (find+score+pick) · `--rescore` (ignore history, testing)
+  · `--show` (print the queue + history, score nothing, free).
+### Automation — Stage 2 is BUILT (`batch_maker.py`): make the picked stories into videos
+Takes the top pending stories from `queue/story_queue.json` and builds a full video for each by
+running the EXISTING pipeline — `run.py "<url>" --fresh` per story — so there is ONE
+implementation of the 8 steps and every cost/time line prints per video as usual.
+
+- **Capped batch:** makes up to `BATCH_MAX` (default 3, env override) per run, highest score
+  first — not the whole queue.
+- **Cost gate:** prints how many videos + a rough total (`PER_VIDEO_EST` ~$2.60/video, an
+  ESTIMATE only) and waits for you to type `yes`. Skip with `--yes`/`-y` for unattended runs.
+- **Own folder per video:** after each build it COPIES `output/` into `videos/<date>-<slug>/`
+  (slug taken from the story URL) BEFORE the next `--fresh` run wipes `output/`, so videos never
+  overwrite each other.
+- **Skip on failure:** a failed video is logged, left `"pending"` in the queue to retry later,
+  and the batch continues.
+- **Marks made:** each finished story's queue entry flips to `"made"` (+ its `video_dir`), saved
+  after every video, so a mid-batch crash never loses progress and made stories are never remade.
+- **Honest total:** the end-of-batch total is the REAL cost, summed from each video's recorded
+  `analysis.json` costs — not the estimate.
+- **Usage:** `python batch_maker.py` (top BATCH_MAX, asks to confirm) · `--max N` (override the
+  cap) · `--yes` (don't ask) · `--dry-run` (show the plan + estimate, spend nothing).
+- **NOT built yet:** quality-scoring feedback on finished videos, and (much later, deliberately
+  deferred) TikTok posting.

@@ -2,5 +2,7 @@
 .env
 __pycache__/
 output/
+queue/
+videos/
 *.pyc
 .DS_Store
